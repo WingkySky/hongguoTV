@@ -47,3 +47,15 @@ Mac 的版本号与构建号在 `desktop-mac/Info.plist` 中独立递增，使�
 ## 文档维护
 
 项目入口为 README，构建与发布说明位于 kotlin-tv/。每次新增、调整或移除用户可见功能，必须在同一变更中同步更新根目录 README 的对应平台功能介绍；涉及使用方法、支持范围或限制时，同时更新对应平台 README 和专题说明。只描述已实现能力，明确待验证和暂不支持的部分，不将开发计划写成现有功能。排查账号、播放及旧系统兼容问题前查阅 [开发排查笔记](docs/DEVELOPMENT_NOTES.md)。新增功能保留必要的协议与验收边界；不再新增逐版本交付报告，更新内容写入 Git 提交或 Release。旧文档可从 Git 历史恢复。
+
+## TV Kotlin 代码阅读与格式
+
+TV 工程的 `.kt` 源码、测试和 `.kts` 构建配置使用 ktfmt 0.54 的 `--kotlinlang-style`（四空格缩进），保留已有 import。格式整理不调整界面、接口、数据结构或业务行为。Android Studio 可安装 ktfmt 插件并选择相同风格；普通 Reformat Code 与 ktfmt 的输出可能不同。
+
+阅读顺序建议为 `AndroidManifest.xml` → `MainActivity.onCreate()` → `loadLibrary()` → `showCatalog()`，再进入 `HomeFeedScreen` 等具体页面。页面布局、点击回调和焦点逻辑位于 `app`，内容请求与数据规则主要位于 `core`。关键入口和异步边界补充中文注释；注释说明职责和原因，不逐行复述语法。后续修改代码时同步维护对应注释。
+
+使用固定版本的 ktfmt CLI 时，可对指定 Kotlin 文件执行：
+
+```sh
+java -jar /工具路径/ktfmt-0.54-jar-with-dependencies.jar --kotlinlang-style --do-not-remove-unused-imports 文件.kt
+```
