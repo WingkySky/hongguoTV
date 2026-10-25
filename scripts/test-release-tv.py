@@ -140,6 +140,7 @@ class RunnerTests(unittest.TestCase):
             notes=m.notes_for(dict(version='0.1.8',baselineTag='kotlin-v0.1.7',base='a'*40,previousPackage='com.hongguotv.nativeapp'))
             self.assertIn('需单独安装',notes);self.assertIn('不自动迁移',notes)
             self.assertNotIn('可覆盖更新并保留数据',notes)
+            self.assertNotIn('先在旧版备份',notes)
 
     def test_git_status_leading_space_is_preserved(self):
         with patch.object(m.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=' M README.md\n')):

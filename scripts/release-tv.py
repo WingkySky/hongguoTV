@@ -198,7 +198,7 @@ def notes_for(plan, notes_file=None):
         changes = list(dict.fromkeys(re.sub(r'^(feat|fix)(\([^)]*\))?!?:\s*', '', t) for t in titles if re.match(r'^(feat|fix)(\([^)]*\))?!?:', t)))
         if not changes:
             raise Failure('No unreleased TV feature/fix commits; supply reviewed --notes-file if a release is intended')
-        migration = '本版更名为果映 TV 并使用新包名，需单独安装，不能覆盖旧包名版本。本机数据及登录态不自动迁移，可先在旧版备份片单，再在新版恢复；登录需重新进行。' if plan.get('previousPackage')=='com.hongguotv.nativeapp' else '保持新包名与原签名，同包名旧版可覆盖更新并保留数据。'
+        migration = '本版更名为果映 TV 并使用新包名，需单独安装，不能覆盖旧包名版本。本机数据及登录态不自动迁移，需重新登录获取账户内容；当前未提供图形界面的本机记录迁移入口。' if plan.get('previousPackage')=='com.hongguotv.nativeapp' else '保持新包名与原签名，同包名旧版可覆盖更新并保留数据。'
         notes = f"果映 TV {plan['version']} 更新说明\n\n"+'\n'.join('- '+t for t in changes)+'\n\n支持 Android 6.0 及以上；'+migration
     if not notes or len(notes)>1500:
         raise Failure('Release notes must contain 1..1500 characters')
