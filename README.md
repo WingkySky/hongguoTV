@@ -8,8 +8,8 @@ Android TV 使用 `kotlin-tv/` 中的 Kotlin 原生客户端，支持 **Android 
 
 | 内容 | 状态 |
 | --- | --- |
-| 已发布 TV 正式版 | **0.1.8（versionCode 49）**，标签 `kotlin-v0.1.8`，旧包名 `com.hongguotv.nativeapp` |
-| 当前分支新增内容 | 显示名称「果映 TV」、新包名、C3 图标与 TV 横幅、遥控器三栏搜索；已实现并完成自动检查，**待 PR 审核合并与正式发布，设备验收待完成** |
+| 已发布 TV 正式版 | **0.1.8（versionCode 49）**，标签 `kotlin-v0.1.8`，旧包名 `com.hongguotv.native<br/>app` |
+| 当前分支新增内容 | 显示名称「果映 TV」、新包名、C3 图标与 TV 横幅、遥控器三栏搜索；已实现并完成自动检查 |
 | 稳定分支 | `main`；功能合并、生成测试包和发布 Release 是不同步骤 |
 
 下方功能介绍以当前分支实现为准。公开 Release 附件仍是已发布版本，不会因本地代码修改自动更新。
