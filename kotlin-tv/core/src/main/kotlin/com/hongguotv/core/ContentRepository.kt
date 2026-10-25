@@ -5,13 +5,38 @@ package com.hongguotv.core
 
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+
+/** 站点 CDN 在重定向时下发 ttwid 并拦截无 Cookie 的后续请求，内存 Cookie 罐使其自动流转。 */
+internal class MemoryCookies : CookieJar {
+    private val store = ConcurrentHashMap<String, MutableList<Cookie>>()
+
+    // RFC 语义：同名 + 同域 + 同路径的新 Cookie 替换旧值，而不是叠加。
+    private fun List<Cookie>.replacedBy(cookies: List<Cookie>) =
+        filter { kept -> cookies.none { it.name == kept.name && it.domain == kept.domain && it.path == kept.path } }
+            .toMutableList()
+            .also { it += cookies }
+
+    override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+        if (cookies.isEmpty()) return
+        store.compute(url.host) { _, kept -> kept.orEmpty().replacedBy(cookies) }
+    }
+
+    override fun loadForRequest(url: HttpUrl): List<Cookie> {
+        val now = System.currentTimeMillis()
+        return store[url.host].orEmpty().filter { it.expiresAt > now }
+    }
+}
 
 internal fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject(it) }
 
@@ -132,10 +157,21 @@ class ContentRepository(
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .callTimeout(45, TimeUnit.SECONDS)
+            .cookieJar(MemoryCookies())
             .build(),
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val signer = Signer()
+
+    // 榜单页偶发被 CDN 软拦截（空响应或挂起到超时）：收紧超时并单次重试，
+    // 让整榜失败在最坏约 15 秒内暴露，而不是分钟级的全局超时。
+    private val rankHttp: OkHttpClient by lazy {
+        http.newBuilder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .callTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
     private val site = "https://hongguoduanju.com"
     private val suggestionWebId = UUID.randomUUID().toString()
     // Compatibility approach from upstream PR #22. Keep search signing separate.
@@ -167,6 +203,7 @@ class ContentRepository(
         url: String,
         signed: Signer.Request? = null,
         retryTransient: Boolean = false,
+        client: OkHttpClient = http,
     ): String {
         val request =
             Request.Builder()
@@ -178,7 +215,7 @@ class ContentRepository(
             request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType()))
         }
         fun fetch() =
-            RequestScope.execute(http.newCall(request.build())) { response ->
+            RequestScope.execute(client.newCall(request.build())) { response ->
                 if (!response.isSuccessful) throw ContentHttpException(response.code)
                 val body = response.body ?: throw IOException("内容响应为空")
                 if (body.contentLength() > 16 * 1024 * 1024) throw IOException("内容响应过大")
@@ -249,7 +286,14 @@ class ContentRepository(
 
     fun rankPage(board: RankBoard, page: Int = 1): CatalogPage {
         require(page in 1..100)
-        return ComicRank.parse(text("$site/rank/${board.route}?page=$page"), page, board)
+        // 榜单走收紧超时的专用客户端并重试一次瞬时失败；ttwid 由内存 Cookie 罐自动携带。
+        val body =
+            text(
+                "$site/rank/${board.route}?page=$page",
+                retryTransient = true,
+                client = rankHttp,
+            )
+        return ComicRank.parse(body, page, board)
     }
 
     fun rankSnapshot(board: RankBoard): RankSnapshot {
