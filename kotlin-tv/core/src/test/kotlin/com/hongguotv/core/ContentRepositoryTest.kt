@@ -437,6 +437,33 @@ class ContentRepositoryTest {
     }
 
     @Test
+    fun rankPageRetriesTransientFailureInsteadOfFailingTheBoard() {
+        // CDN 软拦截表现为超时或空响应：同页一次有界重试应恢复读取。
+        var calls = 0
+        val repo = repository {
+            _ ->
+            calls += 1
+            if (calls == 1) throw java.net.SocketTimeoutException("stalled stream")
+            else currentRank(rankPayload(1, 2))
+        }
+        val result = repo.rankPage(RankBoard.COMIC)
+        assertEquals(2, calls)
+        assertEquals(listOf("123"), result.items.map { it.id })
+    }
+
+    @Test
+    fun rankPageSurfacesPersistentFailureAfterOneRetry() {
+        var calls = 0
+        val repo = repository {
+            _ ->
+            calls += 1
+            throw java.net.SocketTimeoutException("still stalled")
+        }
+        assertThrows(IOException::class.java) { repo.rankPage(RankBoard.ALL) }
+        assertEquals(2, calls)
+    }
+
+    @Test
     fun renderedLastPageCountsCurrentPageWithoutAnAnchor() {
         val repo = repository {
             """<script>_ROUTER_DATA={"loaderData":{"rank_hot-comic-drama/page":{"rankKey":"comic","pageNum":5}}};</script>

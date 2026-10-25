@@ -27,7 +27,6 @@ internal class RankingScreen(
     private val body = LinearLayout(activity).apply { orientation = VERTICAL }
     private var filterButton: TextView
     private var refreshButton: TextView
-    private var loading = false
     private var browser: ContinuousCatalogView? = null
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -77,11 +76,13 @@ internal class RankingScreen(
         RankBoard.entries.forEach { board ->
             val control =
                 button(board.label) {
-                        if (loading || state.board == board) return@button
+                        // 每榜独立异步：TTL 内的缓存直接渲染零请求；未缓存或过期则后台
+                        // 拉取该榜，其他榜单的在途请求不受影响，切换不会让任何读取重来。
+                        if (state.board == board) return@button
                         state.select(board)
                         markControls()
                         render()
-                        if (state.snapshots[board] == null) refresh()
+                        maybeRefresh(board)
                     }
                     .apply {
                         isSelected = state.board == board
@@ -98,7 +99,8 @@ internal class RankingScreen(
         }
         bar.addView(View(activity), params(0, 1).apply { weight = 1f })
         filterButton = button("筛选题材") { chooseTopic() }.apply { nextFocusUpId = nav[2].id }
-        refreshButton = button("刷新") { if (!loading) refresh() }.apply { nextFocusUpId = nav[2].id }
+        refreshButton = button("刷新") { maybeRefresh(state.board, force = true) }
+            .apply { nextFocusUpId = nav[2].id }
         bar.addView(filterButton, params(-2))
         bar.addView(refreshButton, params(-2).apply { leftMargin = dp(8) })
         controls += filterButton
@@ -120,6 +122,7 @@ internal class RankingScreen(
     private fun markControls() {
         RankBoard.entries.forEachIndexed { i, b ->
             controls[i].isSelected = state.board == b
+            controls[i].text = b.label + if (state.isRefreshing(b)) " …" else ""
             controls[i].setTextColor(if (state.board == b) TvStyle.accent else TvStyle.text)
             controls[i].background =
                 TvStyle.shape(
@@ -130,30 +133,43 @@ internal class RankingScreen(
                     else android.graphics.Color.TRANSPARENT,
                 )
         }
+        refreshButton.text = if (state.isRefreshing(state.board)) "读取中…" else "刷新"
         heading.text = "${state.board.label}热播榜"
     }
 
     fun start(force: Boolean, focusNav: Boolean) {
         if (focusNav) nav[2].requestFocus() else controls[state.board.ordinal].requestFocus()
-        if (force || state.snapshots[state.board] == null) refresh()
-        else if (!focusNav && state.selectedId.isNotEmpty()) browser?.enter()
+        // 进入页面时 TTL 内的缓存直接展示；是否续期由状态机判断，不做模态等待。
+        maybeRefresh(state.board, force = force && !state.isFresh(state.board))
+        if (!state.isRefreshing(state.board) && !focusNav && state.selectedId.isNotEmpty()) browser?.enter()
     }
 
-    private fun refresh() {
-        loading = true
-        refreshButton.text = "读取中…"
-        subtitle.text = "正在读取完整榜单，题材筛选将覆盖全部已返回作品…"
-        val board = state.board
-        load(board) { snapshot, error ->
-            loading = false
+    /** 单一入口：按 TTL 决定是否拉取当前/目标榜单；同榜在途自动去重，跨榜并行。 */
+    private fun maybeRefresh(target: RankBoard, force: Boolean = false) {
+        if (!force && state.isFresh(target)) return
+        if (!state.beginRefresh(target)) {
+            markControls()
+            return
+        }
+        markControls()
+        if (target == state.board) {
+            refreshButton.text = "读取中…"
+            // 旧榜单继续展示（若有），render 会为静默续期补上状态提示。
+            render()
+            if (state.snapshots[target] == null)
+                subtitle.text = "正在读取完整榜单，题材筛选将覆盖全部已返回作品…"
+        }
+        load(target) { snapshot, error ->
+            state.endRefresh(target, snapshot)
+            markControls()
+            if (target != state.board) return@load // 其他榜的后台完成只更新按钮状态
             refreshButton.text = "刷新"
             if (snapshot != null) {
-                state.snapshots[board] = snapshot
                 if (state.topic !in snapshot.topics) state.topic = ""
                 render()
             } else {
                 render()
-                if (state.snapshots[board] == null) {
+                if (state.snapshots[target] == null) {
                     body.removeAllViews()
                     body.addView(
                         label("暂时无法读取榜单，请按右上方刷新重试", 17f, TvStyle.muted).apply {
@@ -162,14 +178,13 @@ internal class RankingScreen(
                     )
                 }
                 subtitle.text =
-                    if (state.snapshots[board] != null) "刷新失败，保留上次榜单 · ${error.orEmpty()}"
+                    if (state.snapshots[target] != null) "本次更新失败，保留上次榜单 · ${error.orEmpty()}"
                     else "读取失败 · ${error.orEmpty()} · 按右上方刷新重试"
             }
         }
     }
 
     private fun chooseTopic() {
-        if (loading) return
         val snapshot = state.snapshots[state.board] ?: return
         val values = listOf("") + snapshot.topics
         val labels =
@@ -194,12 +209,15 @@ internal class RankingScreen(
         body.removeAllViews()
         val snapshot = state.snapshots[state.board]
         filterButton.text = if (state.topic.isBlank()) "筛选题材" else "题材：${state.topic}"
-        filterButton.isEnabled = snapshot != null && !loading
+        filterButton.isEnabled = snapshot != null
         val all = snapshot?.filtered(state.topic).orEmpty()
         subtitle.text =
             snapshot?.let {
                 "${it.ranking.updatedText.ifBlank { "来源：红果官网热播榜" }}  ·  ${it.items.size} 部${if(state.topic.isNotEmpty()) "  ·  ${state.topic} ${all.size} 部（保留原榜名次）" else "  ·  筛选覆盖本榜全部作品"}"
             } ?: "选择榜单，发现下一部好剧"
+        // 静默续期：旧榜单继续展示，只在状态行末尾提示后台更新。
+        if (snapshot != null && state.isRefreshing(state.board))
+            subtitle.text = subtitle.text.toString() + "  ·  正在后台更新…"
         if (all.isEmpty()) {
             browser = null
             body.addView(
