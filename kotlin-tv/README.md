@@ -1,6 +1,8 @@
-# 红果 TV 原生客户端
+# 果映 TV 原生客户端
 
-工程：Kotlin + Android View + Media3。最低 Android 6.0 / API 23；compileSdk、targetSdk 为 36。包名 `com.hongguotv.nativeapp`，与旧 React Native 应用 `com.hongguotv` 的数据独立。
+工程：Kotlin + Android View + Media3。最低 Android 6.0 / API 23；compileSdk、targetSdk 为 36。安装标识 `io.github.tsukiyo_zero.guoyingtv`，与旧原生包 `com.hongguotv.nativeapp`、React Native 包 `com.hongguotv` 的数据独立。Kotlin namespace 暂保留旧命名，Manifest 使用完整 Activity 类名，真正安装标识以 APK 的 applicationId 为准。
+
+本轮更名与遥控器搜索待用户设备验收，尚未正式发布。新包需单独安装，不能覆盖旧包名；本机数据与登录态不自动迁移。可通过旧版导出、新版导入片单备份迁移受支持的本机记录，重新登录获取账户内容；保持原签名与 Android 6 v1。
 
 功能介绍见 [项目主页](../README.md)，工作约定见 [开发流程](../CONTRIBUTING.md)。
 
@@ -17,6 +19,12 @@
 本轮参考本地官方 App 6.5.5.32 中可识别的 TTVideoEngine、DataLoaderHelper 和短视频预加载组件，采用独立实现；静态分析不能确认官方实际启用的策略或参数。Media3 接入依据 [Android 官方预加载文档](https://developer.android.com/media/media3/exoplayer/preloading-media/preloadmanager)。没有在模拟器或电视上进行速度对比，不承诺固定首帧耗时或达到官方 App 的速度。首次进入仍需要推荐、播放地址和视频索引请求，连续刷剧的效果需用户安装测试包验收。
 
 日志只记录 `Home recommendations`、`Home category`、`Home detail`、`Home starter-cache hit`、`Home play-address`、`Home promoted in-flight preload` 与 `Home first-frame` 等阶段信息，不打印播放地址或账户信息。`first-frame` 从交给播放器开始计时，不包含此前推荐及地址请求耗时。
+
+## 遥控器搜索
+
+找剧页保留原组合筛选，点击「屏幕键盘」进入独立搜索工作区；提交关键词后也进入该布局。左侧为 6 列 A–Z/0–9 键盘，提供删除、清空、搜索、系统中文输入、手机输入和返回分类；中间为服务端联想及最多 8 条最近搜索，右侧为连续分页海报结果。结果按显示宽度使用 2/3/4 列，窄屏时缩小侧栏，键盘区可纵向滚动，不挤占组合筛选。
+
+字母按键输入小写字符，插入/删除遵守光标选区；删除按 Unicode 字符处理，不拆开代理对。输入最多 80 字，联想仍延迟 350ms 并取消旧请求，选择候选词或历史后明确搜索；不自动把字母当作保证可匹配的拼音首字母。左右可在键盘、候选与结果之间移动，结果首列向左返回词条区；返回退出搜索回到组合筛选。中文输入调用系统输入法，手机输入仍需可互通局域网。布局与控件回归覆盖 API 23/26，遥控器手感需用户验收。
 
 ## 连续浏览
 

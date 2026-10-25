@@ -108,7 +108,7 @@ def manifest(release):
                 badging = run([str(build_tools/'aapt'), 'dump', 'badging', str(path)])
             line = next((line for line in badging.splitlines() if line.startswith('package:')), '')
             fields = dict(re.findall(r"(\w+)='([^']*)'", line))
-            if fields.get('name')!='com.hongguotv.nativeapp':
+            if fields.get('name') not in ('com.hongguotv.nativeapp','io.github.tsukiyo_zero.guoyingtv'):
                 continue
             code = int(fields['versionCode'])
             if not 1<=code<=2147483647:
@@ -119,7 +119,7 @@ def manifest(release):
             raise Failure('Historical release contains no recognized TV APK')
         return max(found, key=lambda m: m['versionCode'])
     data = json.loads(read_public(asset['browser_download_url'], 128*1024))
-    if (data['tag'] != release['tag_name'] or data['packageName'] != 'com.hongguotv.nativeapp'
+    if (data['tag'] != release['tag_name'] or data['packageName'] not in ('com.hongguotv.nativeapp','io.github.tsukiyo_zero.guoyingtv')
             or not re.fullmatch(re.escape(data['tag'].removeprefix('kotlin-v'))+r'(?:-[0-9A-Za-z.+-]+)?', data['versionName'])
             or not isinstance(data['versionCode'], int) or not 1<=data['versionCode']<=2147483647):
         raise Failure('Published manifest identity/version mismatch')
@@ -161,7 +161,7 @@ def inventory(apis, override=None):
     version, code = select_version(source, [o[2] for o in observed], occupied, override)
     baseline = max(observed, key=lambda o: (o[2]['versionCode'], o[0]=='github'))
     return dict(version=version, code=code, tag='kotlin-v'+version, base=git('rev-parse', 'HEAD'),
-                previous=source[0], baselinePlatform=baseline[0], baselineTag=baseline[1]['tag_name'])
+                previous=source[0], previousPackage=baseline[2]['packageName'], baselinePlatform=baseline[0], baselineTag=baseline[1]['tag_name'])
 
 
 def tools_env():
@@ -198,7 +198,8 @@ def notes_for(plan, notes_file=None):
         changes = list(dict.fromkeys(re.sub(r'^(feat|fix)(\([^)]*\))?!?:\s*', '', t) for t in titles if re.match(r'^(feat|fix)(\([^)]*\))?!?:', t)))
         if not changes:
             raise Failure('No unreleased TV feature/fix commits; supply reviewed --notes-file if a release is intended')
-        notes = f"红果 TV {plan['version']} 更新说明\n\n"+'\n'.join('- '+t for t in changes)+'\n\n支持 Android 6.0 及以上；保持包名与签名，可覆盖更新并保留数据。'
+        migration = '本版更名为果映 TV 并使用新包名，需单独安装，不能覆盖旧包名版本。本机数据及登录态不自动迁移，可先在旧版备份片单，再在新版恢复；登录需重新进行。' if plan.get('previousPackage')=='com.hongguotv.nativeapp' else '保持新包名与原签名，同包名旧版可覆盖更新并保留数据。'
+        notes = f"果映 TV {plan['version']} 更新说明\n\n"+'\n'.join('- '+t for t in changes)+'\n\n支持 Android 6.0 及以上；'+migration
     if not notes or len(notes)>1500:
         raise Failure('Release notes must contain 1..1500 characters')
     return notes

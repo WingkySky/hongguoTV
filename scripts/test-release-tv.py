@@ -85,6 +85,12 @@ class RunnerTests(unittest.TestCase):
         release=dict(tag_name='kotlin-v0.0.8',assets=[dict(name='update.json',browser_download_url='https://github.com/manifest')])
         data=dict(tag='kotlin-v0.0.8',packageName='com.hongguotv.nativeapp',versionName='0.0.8-android6',versionCode=8)
         with patch.object(m,'read_public',return_value=json.dumps(data).encode()): self.assertEqual(m.manifest(release),data)
+        data['packageName']='io.github.tsukiyo_zero.guoyingtv'
+        with patch.object(m,'read_public',return_value=json.dumps(data).encode()): self.assertEqual(m.manifest(release),data)
+        data['packageName']='unrelated.app'
+        with patch.object(m,'read_public',return_value=json.dumps(data).encode()):
+            with self.assertRaises(m.Failure): m.manifest(release)
+        data['packageName']='io.github.tsukiyo_zero.guoyingtv'
         data['versionCode']=0
         with patch.object(m,'read_public',return_value=json.dumps(data).encode()):
             with self.assertRaises(m.Failure): m.manifest(release)
@@ -128,6 +134,12 @@ class RunnerTests(unittest.TestCase):
         with patch.object(m,'git',return_value='fix: 修复找剧返回\nchore: 调整工具\nfeat(search): 新增联想\nfix: 修复找剧返回'):
             notes=m.notes_for(dict(version='0.1.7',baselineTag='kotlin-v0.1.6',base='a'*40))
             self.assertEqual(notes.count('修复找剧返回'),1);self.assertIn('新增联想',notes);self.assertNotIn('调整工具',notes)
+
+    def test_package_transition_notes_require_separate_install(self):
+        with patch.object(m,'git',return_value='feat: 果映 TV 遥控器搜索与新包名'):
+            notes=m.notes_for(dict(version='0.1.8',baselineTag='kotlin-v0.1.7',base='a'*40,previousPackage='com.hongguotv.nativeapp'))
+            self.assertIn('需单独安装',notes);self.assertIn('不自动迁移',notes)
+            self.assertNotIn('可覆盖更新并保留数据',notes)
 
     def test_git_status_leading_space_is_preserved(self):
         with patch.object(m.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=' M README.md\n')):
