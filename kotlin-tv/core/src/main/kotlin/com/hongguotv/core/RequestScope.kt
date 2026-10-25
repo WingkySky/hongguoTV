@@ -1,22 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.core
 
+// 请求生命周期管理：跟踪当前任务的网络请求，在任务取消时释放对应请求。
+
+import java.io.IOException
 import okhttp3.Call
 import okhttp3.Response
-import java.io.IOException
 
 /** Cancels only the work owned by one navigation/playback intent, including body reads. */
 class RequestScope {
     private var cancelled = false
     private val calls = mutableSetOf<Call>()
 
-    @Synchronized fun cancel() {
+    @Synchronized
+    fun cancel() {
         cancelled = true
         calls.forEach { it.cancel() }
         calls.clear()
     }
 
-    @Synchronized private fun attach(call: Call) {
+    @Synchronized
+    private fun attach(call: Call) {
         if (cancelled || Thread.currentThread().isInterrupted) {
             call.cancel()
             throw IOException("请求已取消")
@@ -24,7 +28,10 @@ class RequestScope {
         calls += call
     }
 
-    @Synchronized private fun detach(call: Call) { calls -= call }
+    @Synchronized
+    private fun detach(call: Call) {
+        calls -= call
+    }
 
     fun <T> run(action: () -> T): T {
         val previous = current.get()
@@ -39,11 +46,15 @@ class RequestScope {
 
     companion object {
         private val current = ThreadLocal<RequestScope>()
+
         fun <T> execute(call: Call, consume: (Response) -> T): T {
             val owner = current.get()
             owner?.attach(call)
-            try { return call.execute().use(consume) }
-            finally { owner?.detach(call) }
+            try {
+                return call.execute().use(consume)
+            } finally {
+                owner?.detach(call)
+            }
         }
     }
 }

@@ -1,8 +1,18 @@
 import java.util.Properties
 
-plugins { id("com.android.application"); kotlin("android") }
-val signingProperties = Properties().apply { val config = rootProject.file("keystore.properties"); if (config.exists()) config.inputStream().use { load(it) } }
-fun signingValue(env: String, key: String): String? = System.getenv(env) ?: signingProperties.getProperty(key)
+plugins {
+    id("com.android.application")
+    kotlin("android")
+}
+
+val signingProperties =
+    Properties().apply {
+        val config = rootProject.file("keystore.properties")
+        if (config.exists()) config.inputStream().use { load(it) }
+    }
+
+fun signingValue(env: String, key: String): String? =
+    System.getenv(env) ?: signingProperties.getProperty(key)
 
 android {
     namespace = "com.hongguotv.nativeapp"
@@ -17,7 +27,12 @@ android {
     buildFeatures { buildConfig = true }
     testOptions {
         unitTests.isIncludeAndroidResources = true
-        unitTests.all { it.systemProperty("robolectric.dependency.repo.url","https://repo.maven.apache.org/maven2") }
+        unitTests.all {
+            it.systemProperty(
+                "robolectric.dependency.repo.url",
+                "https://repo.maven.apache.org/maven2",
+            )
+        }
     }
     signingConfigs {
         create("delivery") {
@@ -27,16 +42,30 @@ android {
             keyPassword = signingValue("HONGGUOTV_KEY_PASSWORD", "keyPassword")
         }
     }
-    buildTypes { getByName("release") { signingConfig = signingConfigs.getByName("delivery"); isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
-    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17; isCoreLibraryDesugaringEnabled = true }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("delivery")
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
+    }
     kotlinOptions { jvmTarget = "17" }
     packaging { resources.excludes += setOf("META-INF/versions/**", "META-INF/*.kotlin_module") }
 }
+
 dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1") {
         // API 23 tests use legacy graphics, without the cross-platform native renderer.
-        exclude(group="org.robolectric",module="nativeruntime-dist-compat")
+        exclude(group = "org.robolectric", module = "nativeruntime-dist-compat")
     }
     implementation("androidx.core:core:1.8.0")
     implementation("com.google.zxing:core:3.5.3")
