@@ -1,6 +1,10 @@
-# 红果 TV 原生客户端
+# 果映 TV 原生客户端
 
-工程：Kotlin + Android View + Media3。最低 Android 6.0 / API 23；compileSdk、targetSdk 为 36。包名 `com.hongguotv.nativeapp`，与旧 React Native 应用 `com.hongguotv` 的数据独立。
+工程：Kotlin + Android View + Media3。最低 Android 6.0 / API 23；compileSdk、targetSdk 为 36。安装标识 `io.github.tsukiyo_zero.guoyingtv`，与旧原生包 `com.hongguotv.nativeapp`、React Native 包 `com.hongguotv` 的数据独立。Kotlin namespace 暂保留旧命名，Manifest 使用完整 Activity 类名，真正安装标识以 APK 的 applicationId 为准。
+
+已发布基线为旧包名的 0.1.7 / 48；当前分支更名、图标与遥控器搜索已实现并完成自动检查，待用户设备验收、PR 合并与正式发布。新包需单独安装，不能覆盖旧包名；本机数据与登录态不自动迁移。备份恢复底层代码仍在，但当前设置页未接入入口，尚不能提供完整的图形迁移流程；重新登录后可获取账户内容。本机记录与账户内容不同，不能据此宣称本机记录已迁移。保持原签名与 Android 6 v1。
+
+桌面图标与应用内标识采用 C3 蓝紫渐变果实银幕图，TV 启动器提供「果映 TV」横幅。主图与生成提示词见 [品牌资源](artwork/README.md)；多密度桌面图标覆盖 Android 6+，本轮使用完整位图，不依赖透明拆层或自适应前景。
 
 功能介绍见 [项目主页](../README.md)，工作约定见 [开发流程](../CONTRIBUTING.md)。
 
@@ -14,9 +18,15 @@
 
 上下换剧时复用缓存；若目标作品仍在预加载，则接续该任务，失败后退回前台加载，避免取消后重复解析与下载。同一 HTTP 分段中的视频数据边到达边交给播放器，不等待整个 512 KiB 分段完成。切换类型、换批、离开页面或退出仍取消过期任务并清理资源。
 
-本轮参考本地官方 App 6.5.5.32 中可识别的 TTVideoEngine、DataLoaderHelper 和短视频预加载组件，采用独立实现；静态分析不能确认官方实际启用的策略或参数。Media3 接入依据 [Android 官方预加载文档](https://developer.android.com/media/media3/exoplayer/preloading-media/preloadmanager)。没有在模拟器或电视上进行速度对比，不承诺固定首帧耗时或达到官方 App 的速度。首次进入仍需要推荐、播放地址和视频索引请求，连续刷剧的效果需用户安装测试包验收。
+本轮参考本地官方 App 6.5.5.32 中可识别的 TTVideoEngine、DataLoaderHelper 和短视频预加载组件，采用独立实现；静态分析不能确认官方实际启用的策略或参数。Media3 接入依据 [Android 官方预加载文档](https://developer.android.com/media/media3/exoplayer/preloading-media/preloadmanager)。首页加载优化已经用户验收并纳入正式 0.1.7。没有与官方 App 进行设备测速对比，不承诺固定首帧耗时；缓存未命中时仍需要必要的推荐、播放地址和视频索引请求。
 
 日志只记录 `Home recommendations`、`Home category`、`Home detail`、`Home starter-cache hit`、`Home play-address`、`Home promoted in-flight preload` 与 `Home first-frame` 等阶段信息，不打印播放地址或账户信息。`first-frame` 从交给播放器开始计时，不包含此前推荐及地址请求耗时。
+
+## 遥控器搜索
+
+找剧页保留原组合筛选，点击「屏幕键盘」进入独立搜索工作区；提交关键词后也进入该布局。左侧为 6 列 A–Z/0–9 键盘，提供删除、清空、搜索、系统中文输入、手机输入和返回分类；中间为服务端联想及最多 8 条最近搜索，右侧为连续分页海报结果。结果按显示宽度使用 2/3/4 列，窄屏时缩小侧栏，键盘区可纵向滚动，不挤占组合筛选。
+
+字母按键输入小写字符，插入/删除遵守光标选区；删除按 Unicode 字符处理，不拆开代理对。输入最多 80 字，联想仍延迟 350ms 并取消旧请求，选择候选词或历史后明确搜索；不自动把字母当作保证可匹配的拼音首字母。左右可在键盘、候选与结果之间移动，结果首列向左返回词条区；返回退出搜索回到组合筛选。中文输入调用系统输入法，手机输入仍需可互通局域网。布局与控件回归覆盖 API 23/26，遥控器手感需用户验收。
 
 ## 连续浏览
 
@@ -48,7 +58,7 @@
 
 ## 版本与签名
 
-修改 `app/build.gradle.kts` 中 `versionCode`、`versionName` 后重新构建。环境变量 `HONGGUOTV_VERSION_CODE`、`HONGGUOTV_VERSION_NAME` 会覆盖文件中的默认值。正式上线时递增版本号与 versionCode，编译调试期间保持不变，测试包通过文件名区分；当前正式版为 0.1.7（versionCode 48），后续正式发布再递增。分支名、APK 文件名或 Git 标签不会自动改变 APK 内部版本。
+调试时保持 `app/build.gradle.kts` 的 versionName/versionCode 不变，通过文件名区分测试包；正式发布由统一入口自动递增版本。环境变量 `HONGGUOTV_VERSION_CODE`、`HONGGUOTV_VERSION_NAME` 会覆盖文件中的默认值。当前正式版为 0.1.7（versionCode 48），后续正式发布再递增。分支名、APK 文件名或 Git 标签不会自动改变 APK 内部版本。
 
 开发 APK 使用本机 Debug 签名。电视已经安装的版本只能由相同包名、相同签名的新版覆盖；换电脑或改用其他签名可能无法覆盖安装。不要删除、替换现有签名密钥，不要将密钥或密码提交到仓库。
 
@@ -61,13 +71,25 @@ Release 构建读取 `kotlin-tv/keystore.properties`（已忽略）或对应环�
 | keyAlias | HONGGUOTV_KEY_ALIAS |
 | keyPassword | HONGGUOTV_KEY_PASSWORD |
 
-`storeFile` 建议填写已有密钥的绝对路径。配置正确且确认签名连续后，可执行：
+`storeFile` 建议填写已有密钥的绝对路径。默认 assembleDebug 使用本机 Debug 签名；交付测试包另用原签名签署并核验，不能只根据文件名判断签名。
+
+## 正式发布与在线更新
+
+从仓库根目录使用统一入口：
 
 ```sh
-./scripts/build-kotlin.sh
+# 只读预演：核对两平台已发布版本、标签和草稿，输出版本规划
+python3 scripts/release-tv.py
+
+# 功能已验收并合入 main、工作区干净后，明确执行正式发布
+python3 scripts/release-tv.py --publish
 ```
 
-脚本执行测试、Release lint、Release 构建，从实际 APK 读取版本和最低系统，计算大小与 SHA256，自动在 `outputs/releases/<tag>/` 生成配套 APK 和 `update.json`。需要 Python 3，以及 Android SDK 中的 aapt。它不会推送代码或创建 GitHub Release。发布完整步骤见 [AUTO_UPDATES.md](AUTO_UPDATES.md)。
+正常发布无需手动指定版本；自动执行版本提交/PR、构建检查、原签名与 v1 校验、双平台标签和附件发布及 Latest 核验。首次需要配置已有凭据、工具链和原签名；中断后按记录使用 `--publish --resume <版本>`，不另开版本。新包名过渡由更新说明明确提示单独安装，不将旧包当作新包覆盖升级。
+
+`./scripts/build-kotlin.sh` 只做本地 Release 构建和配套清单生成，不发布。它按实际版本写入 `outputs/releases/<tag>/`；调试期间优先使用 assembleDebug，避免用相同版本覆盖本地保存的正式包目录。完整配置与故障恢复见 [AUTO_UPDATES.md](AUTO_UPDATES.md)。
+
+用户后续在同包名果映 TV 内可从 GitCode 检查、下载并校验新版，由系统确认安装。GitHub/GitCode Release 也可手动下载；本地测试包没有上传正式渠道，不会被应用内更新获取。
 
 ## 验证边界
 

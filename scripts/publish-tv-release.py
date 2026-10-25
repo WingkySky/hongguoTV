@@ -77,7 +77,7 @@ def bundle(directory):
     if Path(name).name != name or not name.endswith('.apk'):
         raise Failure('Invalid APK filename')
     files = [directory / name, directory / 'release-notes.md', directory / 'update.json']
-    if manifest['packageName'] != 'com.hongguotv.nativeapp' or manifest['minSdk'] != 23:
+    if manifest['packageName'] != 'io.github.tsukiyo_zero.guoyingtv' or manifest['minSdk'] != 23:
         raise Failure('Unexpected package or minSdk')
     apk = files[0].read_bytes()
     if len(apk) != manifest['apk']['size'] or hashlib.sha256(apk).hexdigest() != manifest['apk']['sha256']:
@@ -93,7 +93,7 @@ class Publisher:
         self.platform, self.token, self.tag, self.notes = platform, token, tag, notes
         self.base = ('https://api.github.com/repos/' if platform == 'github' else
                      'https://api.gitcode.com/api/v5/repos/') + REPO
-        self.title = '红果 TV v' + tag.removeprefix('kotlin-v')
+        self.title = '果映 TV v' + tag.removeprefix('kotlin-v')
 
     def api(self, path, method='GET', value=None, missing=False):
         url = self.base + path

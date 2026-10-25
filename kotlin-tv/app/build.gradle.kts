@@ -8,7 +8,7 @@ android {
     namespace = "com.hongguotv.nativeapp"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.hongguotv.nativeapp"
+        applicationId = "io.github.tsukiyo_zero.guoyingtv"
         minSdk = 23
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 48

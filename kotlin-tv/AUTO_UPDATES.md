@@ -4,12 +4,18 @@
 
 电视先请求 `https://api.gitcode.com/api/v5/repos/tsukiyo-zero/hongguoTV/releases/latest?type=latest`，获取最新正式发行版标签，再读取该标签附件中的 `update.json`，比较内部版本号，并从 GitCode 根据清单的标签和附件名下载 APK。清单标签必须与接口返回标签一致。仅允许 HTTPS 和 GitCode 官方 API、站点及 file-cdn.gitcode.com 下载域名。此流程由 App 实现；最终覆盖安装由安卓系统执行。
 
+## 新包名过渡
+
+本轮 TV 更名为「果映 TV」，安装标识改为 `io.github.tsukiyo_zero.guoyingtv`，当前正式 0.1.7 / 48 仍是旧包名 `com.hongguotv.nativeapp`。新包名首次正式版需用户手动单独安装，不能依赖旧 App 的检查更新完成跨包名升级。本机数据与登录态不自动继承，账户需重新登录；当前设置没有备份恢复入口，尚不能把底层备份实现作为现成的用户迁移步骤。测试期间保持版本号不变。
+
+新包的更新校验、打包与上传入口只接受新包名。统一入口读取历史版本时允许这两个已知包名以规划版本并保留旧签名基线，拒绝无关包名；首次过渡的自动更新说明会明确提示单独安装。新包名正式发布后继续同包名更新，不另开旧包名 APK 版本线；GitCode/GitHub 仓库及附件命名保持原协议。
+
 ## 发布流程
 
 日常优先使用下方统一入口；本节分步骤流程及后面的打包／上传命令保留用于排查和单独操作。
 
 1. 在 `app/build.gradle.kts` 调整 versionName，增加 versionCode。正式发布内部版本号必须超过上一正式版本；调试过程中不递增，使用文件名区分。允许跳过未公开的版本号，无需补发每个中间版本。环境变量可覆盖默认版本，打包后核对 APK 实际元数据。
-2. 使用同一包名 `com.hongguotv.nativeapp` 和现有签名构建，检查最低系统、版本和签名。不要换用新 Debug 签名或将签名密钥提交到仓库。构建方法见 [README](README.md)。
+2. 使用新包名 `io.github.tsukiyo_zero.guoyingtv` 和现有签名构建，检查最低系统、版本和签名。不要换用新 Debug 签名或将签名密钥提交到仓库。构建方法见 [README](README.md)。
 3. 执行 `./scripts/build-kotlin.sh`，自动在 `outputs/releases/<tag>/` 生成配套 APK 和 `update.json`。清单从实际 APK 提取版本、包名、最低系统，并计算大小和 SHA256；环境变量覆盖后的版本也会正确读取。直接运行 Gradle 或 IDEA 的普通构建任务仍只生成 APK。
 4. 在 GitCode 创建同仓库 Release。Target 选择实际打包所用的提交或分支；APK 若来自尚未合并的功能分支，不能误选 main。
 5. 上传配套 APK 和 `update.json`，正式发布并设为 Latest。草稿和 Pre-release 不用于稳定在线更新。
@@ -45,7 +51,7 @@ python3 scripts/prepare-kotlin-release.py \
 ```json
 {
   "schema": 1,
-  "packageName": "com.hongguotv.nativeapp",
+  "packageName": "io.github.tsukiyo_zero.guoyingtv",
   "versionCode": 23,
   "versionName": "0.0.7-search-input",
   "minSdk": 23,
@@ -114,7 +120,7 @@ python3 scripts/release-tv.py --publish --resume 0.1.7
 
 ### 验证范围
 
-`python3 scripts/test-release-tv.py` 和 `python3 scripts/test-publish-tv-release.py` 为离线回归，不访问平台或上传。统一入口已完成真实只读版本预演；创建版本提交的流程在临时 Git 仓库验证，其余写入边界及续传通过隔离测试覆盖。下层上传器已有双平台真实发布记录，统一入口首次完整正式发布仍需在下一次用户授权发布时验证，本轮不为测试工具而发布新 APK。
+`python3 scripts/test-release-tv.py` 和 `python3 scripts/test-publish-tv-release.py` 为离线回归，不访问平台或上传。统一入口已于 0.1.7 / 48 完成旧包名的完整真实发布：版本规划、自动检查、原签名与 v1 校验、发布准备 PR、双平台标签、附件上传及 Latest 核验。新包名过渡目前仅通过自动检查，首次新包名正式发布仍需用户明确授权；本轮不为测试工具而发布 APK。
 
 ## 双平台附件上传脚本（独立使用）
 

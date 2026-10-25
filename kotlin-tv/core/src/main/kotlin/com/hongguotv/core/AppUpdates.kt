@@ -31,7 +31,7 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
         const val MAX_APK_BYTES = 80L * 1024 * 1024
         fun parse(json: String): AppUpdate {
             val o = JSONObject(json)
-            require(o.getInt("schema") == 1 && o.getString("packageName") == "com.hongguotv.nativeapp") { "更新信息不匹配" }
+            require(o.getInt("schema") == 1 && o.getString("packageName") == "io.github.tsukiyo_zero.guoyingtv") { "更新信息不匹配" }
             val apk = o.getJSONObject("apk")
             val update = AppUpdate(o.getLong("versionCode"), o.getString("versionName"), o.getInt("minSdk"),
                 o.getString("tag"), apk.getString("name"), apk.getLong("size"), apk.getString("sha256").lowercase(), o.optString("notes").take(1500))
@@ -103,6 +103,8 @@ class AppUpdateRepository : java.io.Closeable {
         val release = readMetadata(AppUpdate.LATEST_API)
         val tag = try { AppUpdate.latestTag(release) } catch (_: Exception) { throw IOException("最新发行版信息格式不正确") }
         val metadata = readMetadata("${AppUpdate.RELEASES}/download/$tag/update.json")
+        if(runCatching { JSONObject(metadata).optString("packageName") }.getOrDefault("")=="com.hongguotv.nativeapp")
+            throw IOException("当前发行版仍为旧包名，果映 TV 新包名正式更新尚未发布")
         return try {
             AppUpdate.parse(metadata).also { require(it.tag == tag) { "清单标签不匹配" } }
         } catch (_: Exception) { throw IOException("更新信息格式不正确") }

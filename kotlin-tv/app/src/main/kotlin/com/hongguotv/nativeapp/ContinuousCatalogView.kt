@@ -35,6 +35,8 @@ internal class ContinuousCatalogView(
     private var restorePosition: Position?=null
     private var itemHeightLimit=0
     private var remoteNavigation=false
+    private var sideEntry: View?=null
+    fun setSideEntry(view: View?) { sideEntry=view }
     var onBrowsePosition: ((Int)->Unit)?=null
     var onGridFocus: ((Boolean)->Unit)?=null
     val grid=object: GridView(context) {
@@ -94,6 +96,7 @@ internal class ContinuousCatalogView(
             } else if(event.action==KeyEvent.ACTION_DOWN) {
                 navigating=key in listOf(KeyEvent.KEYCODE_DPAD_DOWN,KeyEvent.KEYCODE_DPAD_RIGHT)
                 when {
+                    key==KeyEvent.KEYCODE_DPAD_LEFT && grid.selectedItemPosition%columns==0 && sideEntry!=null -> { sideEntry?.requestFocus();true }
                     key==KeyEvent.KEYCODE_DPAD_UP && grid.selectedItemPosition in 0 until columns -> { upper.requestFocus();true }
                     key==KeyEvent.KEYCODE_DPAD_DOWN && grid.selectedItemPosition>=((entries.size-1)/columns)*columns -> {
                         if(remoteNavigation) {

@@ -19,7 +19,8 @@ internal class SearchSuggestionsView(
     private val peers: List<View>,
     private val destination: ()->View?,
     private val fetch: (String)->List<String>,
-    private val search: (String)->Unit
+    private val search: (String)->Unit,
+    private val vertical: Boolean=false
 ): HorizontalScrollView(context) {
     private val main=Handler(Looper.getMainLooper())
     private val worker=Executors.newSingleThreadExecutor()
@@ -30,6 +31,9 @@ internal class SearchSuggestionsView(
     private var scope: RequestScope?=null
     private var ticket=0
     private var closed=false
+    var navigationChanged: (()->Unit)?=null
+    var afterWords: ()->View?=destination
+    fun entry(): View?=chips.firstOrNull()
     private val watcher=object: TextWatcher {
         override fun beforeTextChanged(s: CharSequence?,start: Int,count: Int,after: Int)=Unit
         override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int)=Unit
@@ -37,6 +41,7 @@ internal class SearchSuggestionsView(
     }
     init {
         isHorizontalScrollBarEnabled=false;isFocusable=false
+        line.orientation=if(vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
         addView(line);visibility=GONE
         input.addTextChangedListener(watcher)
     }
@@ -65,7 +70,7 @@ internal class SearchSuggestionsView(
         line.removeAllViews();chips.clear()
         values.distinct().take(8).forEach { value ->
             val chip=TextView(context).apply {
-                id=View.generateViewId();text=value;textSize=13f;maxLines=1
+                id=View.generateViewId();text=value;textSize=13f;maxLines=if(vertical) 2 else 1
                 ellipsize=android.text.TextUtils.TruncateAt.END;maxWidth=dp(300)
                 isFocusable=true;isClickable=true;setTextColor(TvStyle.text)
                 setPadding(dp(12),dp(8),dp(12),dp(8));minHeight=dp(36)
@@ -73,7 +78,7 @@ internal class SearchSuggestionsView(
                 setOnFocusChangeListener { _,focus -> background=TvStyle.card(context,focus) }
                 setOnClickListener { search(value) }
             }
-            chips+=chip;line.addView(chip,LinearLayout.LayoutParams(-2,-2).apply { rightMargin=dp(8) })
+            chips+=chip;line.addView(chip,LinearLayout.LayoutParams(if(vertical) dp(if(resources.configuration.screenWidthDp<800) 116 else 148) else -2,-2).apply { if(vertical) bottomMargin=dp(6) else rightMargin=dp(8) })
         }
         if(failed) line.addView(TextView(context).apply {
             text="联想暂不可用，可直接按搜索";textSize=12f;setTextColor(TvStyle.muted)
@@ -84,6 +89,14 @@ internal class SearchSuggestionsView(
     }
     fun updateNavigation() {
         val target=destination()?.id ?: input.id
+        if(vertical) {
+            chips.forEachIndexed { i,chip ->
+                chip.nextFocusUpId=chips.getOrNull(i-1)?.id ?: input.id
+                chip.nextFocusDownId=chips.getOrNull(i+1)?.id ?: afterWords()?.id ?: target
+                chip.nextFocusLeftId=peers.lastOrNull()?.id ?: input.id;chip.nextFocusRightId=target
+            }
+            navigationChanged?.invoke();return
+        }
         (peers+input).forEach { it.nextFocusDownId=chips.firstOrNull()?.id ?: target }
         chips.forEachIndexed { i,chip ->
             chip.nextFocusUpId=input.id;chip.nextFocusDownId=target

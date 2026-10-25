@@ -18,7 +18,7 @@ class PublishingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / 'app.apk').write_bytes(b'apk')
-            manifest = dict(tag='kotlin-v0.1.3', packageName='com.hongguotv.nativeapp', minSdk=23,
+            manifest = dict(tag='kotlin-v0.1.3', packageName='io.github.tsukiyo_zero.guoyingtv', minSdk=23,
                             apk=dict(name='app.apk', size=3, sha256=hashlib.sha256(b'apk').hexdigest()), notes='notes')
             (root / 'update.json').write_text(json.dumps(manifest))
             (root / 'release-notes.md').write_text('notes\n')

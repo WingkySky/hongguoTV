@@ -89,6 +89,8 @@ class MainActivity: Activity() {
     private lateinit var library: Library
     private var searchDraft: String?=null
     private var searchSuggestions: SearchSuggestionsView?=null
+    private var tvSearchPanel: TvSearchPanel?=null
+    private var tvSearchOpen=false
     private val discoveryBrowser=DiscoveryBrowserState()
     private var discoveryScreen: DiscoveryScreen?=null
     private lateinit var tvTools: TvTools
@@ -309,7 +311,7 @@ class MainActivity: Activity() {
         generation++; cancelWork(); artwork.cancelPage()
     }
     private fun releaseCatalogViews() {
-        searchSuggestions?.close();searchSuggestions=null
+        searchSuggestions?.close();searchSuggestions=null;tvSearchPanel=null
         discoveryScreen?.close();discoveryScreen=null
         continuousCatalog?.let { view ->
             view.capture()?.let { continuousPositions[continuousKey]=it }
@@ -439,8 +441,8 @@ class MainActivity: Activity() {
         val top=row().apply { setPadding(0,0,0,dp(8)) }
         val brand=row()
         brand.addView(ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) },lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
-        brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
-        top.addView(brand,lp(dp(120),dp(44)))
+        brand.addView(text("果映 TV",if(widthDp()<800) 17f else 22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
+        top.addView(brand,lp(dp(if(widthDp()<800) 105 else 140),dp(44)))
         listOf("首页","找剧","排行榜","收藏","观看历史","账户预约","设置").forEachIndexed { index,label ->
             val item=addButton(top,label,index==tab) { switchTab(index) }
             item.textSize=if(widthDp()<1000) 13f else 15f
@@ -495,35 +497,50 @@ class MainActivity: Activity() {
             nav.forEach { it.nextFocusDownId=typeButtons.getValue(library.contentType).id }
         }
         if(tab==1) {
-            val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入剧名、关键词或拼音"; setText(searchDraft ?: query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
-            searchRow.addView(input,lp(0,dp(45)).apply { weight=1f; rightMargin=dp(10) })
-            fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { returnToDiscovery();return }; runSearch(next) }
-            searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=nav[tab].id; searchButton?.nextFocusUpId=input.nextFocusUpId
-            lateinit var recent: TextView
-            recent=addButton(searchRow,"历史") { showSearchHistory(recent) }; recent.nextFocusUpId=input.nextFocusUpId
-            lateinit var phone: TextView
-            phone=addButton(searchRow,"手机输入") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); tvTools.phoneInput(phone) { runSearch(it) } }; phone.nextFocusUpId=input.nextFocusUpId
-            searchActions.addAll(listOf(recent,phone))
-            if(query.isNotBlank()) searchActions+=addButton(searchRow,"返回分类") { returnToDiscovery() }.apply { nextFocusUpId=input.nextFocusUpId }
+            if(tvSearchOpen || query.isNotBlank()) {
+                val panel=TvSearchPanel(this,searchDraft ?: query,library.searches().map { it.query },nav[tab],
+                    repository::searchSuggestions,::runSearch,
+                    { anchor -> tvTools.phoneInput(anchor,::runSearch) },::returnToDiscovery)
+                tvSearchPanel=panel;searchInput=panel.input;searchButton=panel.searchButton;searchSuggestions=panel.suggestions
+                panel.resultEntry={ continuousCatalog?.grid?.takeIf { catalog.isNotEmpty() } }
+                container.addView(panel,lp(-1,0).apply { weight=1f })
+                nav.forEach { it.nextFocusDownId=panel.entry().id }
+                if(query.isBlank()) {
+                    message(panel.results,"输入关键词后选择联想词，或按「搜索」查看剧集")
+                    if(focusNav) nav[tab].requestFocus() else panel.entry().requestFocus()
+                    return
+                }
+            } else {
+                val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入剧名、关键词或拼音"; setText(searchDraft ?: query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
+                searchRow.addView(input,lp(0,dp(45)).apply { weight=1f; rightMargin=dp(10) })
+                fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { returnToDiscovery();return }; runSearch(next) }
+                searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=nav[tab].id; searchButton?.nextFocusUpId=input.nextFocusUpId
+                lateinit var recent: TextView
+                recent=addButton(searchRow,"历史") { showSearchHistory(recent) }; recent.nextFocusUpId=input.nextFocusUpId
+                lateinit var phone: TextView
+                phone=addButton(searchRow,"手机输入") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); tvTools.phoneInput(phone) { runSearch(it) } }; phone.nextFocusUpId=input.nextFocusUpId
+                val keyboard=addButton(searchRow,"屏幕键盘") { saveDiscoveryDraft();tvSearchOpen=true;showCatalog() }.apply { nextFocusUpId=input.nextFocusUpId }
+                searchActions.addAll(listOf(recent,phone,keyboard))
+                if(query.isNotBlank()) searchActions+=addButton(searchRow,"返回分类") { returnToDiscovery() }.apply { nextFocusUpId=input.nextFocusUpId }
 
-            nav.forEach { it.nextFocusDownId=input.id }
-            input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
-            searchSuggestions=SearchSuggestionsView(this,input,listOfNotNull(searchButton)+searchActions,
-                { if(query.isBlank()) discoveryScreen?.entry()
-                  else continuousCatalog?.grid ?: catalogBody?.getFocusables(View.FOCUS_DOWN)?.firstOrNull() },
-                repository::searchSuggestions,::runSearch).also { container.addView(it) }
-            if(query.isBlank()) {
-                val browser=DiscoveryScreen(this,discoveryBrowser,input,::loadCover,
-                    { openDetail(it,false) },::quickActions,
-                    { selection,cursor,done -> work({ repository.filteredDiscovery(selection,cursor) },{ done(it,null) },{ done(null,it) }) })
-                discoveryScreen=browser;browser.navigationChanged={ searchSuggestions?.updateNavigation() }
-                container.addView(browser,lp(-1,0).apply { weight=1f })
-                browser.start(!focusNav);searchSuggestions?.updateNavigation()
-                if(focusNav) nav[tab].requestFocus()
-                return
+                nav.forEach { it.nextFocusDownId=input.id }
+                input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
+                searchSuggestions=SearchSuggestionsView(this,input,listOfNotNull(searchButton)+searchActions,
+                    { if(query.isBlank()) discoveryScreen?.entry()
+                      else continuousCatalog?.grid ?: catalogBody?.getFocusables(View.FOCUS_DOWN)?.firstOrNull() },
+                    repository::searchSuggestions,::runSearch).also { container.addView(it) }
+                if(query.isBlank()) {
+                    val browser=DiscoveryScreen(this,discoveryBrowser,input,::loadCover,
+                        { openDetail(it,false) },::quickActions,
+                        { selection,cursor,done -> work({ repository.filteredDiscovery(selection,cursor) },{ done(it,null) },{ done(null,it) }) })
+                    discoveryScreen=browser;browser.navigationChanged={ searchSuggestions?.updateNavigation() }
+                    container.addView(browser,lp(-1,0).apply { weight=1f })
+                    browser.start(!focusNav);searchSuggestions?.updateNavigation()
+                    if(focusNav) nav[tab].requestFocus()
+                    return
+                }
+                container.addView(text("关键词搜索覆盖全部剧集 · 返回分类可组合筛选",12f,muted).apply { setPadding(0,dp(6),0,dp(5)) })
             }
-            container.addView(text("关键词搜索覆盖全部剧集 · 返回分类可组合筛选",12f,muted).apply { setPadding(0,dp(6),0,dp(5)) })
-
         } else if(tab>2) {
             val heading=row().apply { setPadding(0,dp(12),0,dp(6)) }
             heading.addView(text(when(tab) { 3->"我的收藏";4->"观看历史";else->"账户预约" },25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
@@ -585,13 +602,13 @@ class MainActivity: Activity() {
                 favoriteStatus=text(favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) };container.addView(favoriteStatus)
             }
         }
-        val body=column(); catalogBody=body; container.addView(body,lp(-1,0).apply { weight=1f })
+        val body=column(); catalogBody=body; (tvSearchPanel?.results ?: container).addView(body,lp(-1,0).apply { weight=1f })
         if(localCatalog()) {
             catalog=localItems(); ranking=null; page=page.coerceIn(1,maxOf(1,(catalog.size+pageSize-1)/pageSize)); hasMore=page*pageSize<catalog.size
         }
         if(load) {
             if(tab==0) catalogGrid(body,focusNav,focusType,loading=true)
-            else { message(body,"正在加载…"); if(focusType) typeButtons[library.contentType]?.requestFocus() else nav[tab].requestFocus() }
+            else { message(body,"正在加载…"); if(tvSearchPanel!=null) tvSearchPanel?.entry()?.requestFocus() else if(focusType) typeButtons[library.contentType]?.requestFocus() else nav[tab].requestFocus() }
             val requestTab=tab; val requestPage=page; val requestQuery=query; val requestType=library.contentType
             work({
                 val result=when(requestTab) { 0 -> repository.home(requestPage,requestType); 2 -> repository.comicRanking(requestPage); else -> repository.searchAll(requestQuery,requestPage) }
@@ -605,7 +622,7 @@ class MainActivity: Activity() {
                     catalog=result.items; hasMore=result.hasMore; ranking=result.ranking
                     val keepNav=nav.any { it.hasFocus() }; val keepType=typeButtons.values.any { it.hasFocus() }
                     val keepInput=searchInput?.hasFocus()==true
-                    val keepSuggestion=searchSuggestions?.findFocus()
+                    val keepSuggestion=tvSearchPanel?.findFocus() ?: searchSuggestions?.findFocus()
                     rankSubtitle?.text=ranking?.updatedText?.ifBlank { "来源：红果漫剧热播榜" } ?: "来源：红果漫剧热播榜"
                     body.removeAllViews(); catalogGrid(body,keepNav || focusNav,keepType || focusType)
                     if(keepInput) searchInput?.requestFocus()
@@ -781,7 +798,7 @@ class MainActivity: Activity() {
         continuousKey=requestQuery
         val upper=searchInput ?: nav[tab]
         lateinit var browser: ContinuousCatalogView
-        browser=ContinuousCatalogView(this,6,upper,{ item,recycled ->
+        browser=ContinuousCatalogView(this,if(tvSearchPanel!=null) { if(widthDp()<800) 2 else if(widthDp()<1200) 3 else 4 } else 6,upper,{ item,recycled ->
             val card=recycled as? CatalogPosterCard ?: CatalogPosterCard(this)
             card.show(item);loadCover(card.image,item.cover);card
         },{ item -> catalogFocus=item.id },
@@ -812,6 +829,10 @@ class MainActivity: Activity() {
         searchButton?.nextFocusDownId=browser.grid.id
         searchActions.forEach { it.nextFocusDownId=browser.grid.id }
         searchSuggestions?.updateNavigation()
+        tvSearchPanel?.let { panel ->
+            panel.updateNavigation();browser.setSideEntry(panel.middleEntry() ?: panel.entry())
+            nav.forEach { it.nextFocusDownId=panel.entry().id }
+        }
         if(focusNav) nav[tab].requestFocus()
         else if(focusType) upper.requestFocus()
         else browser.enter()
@@ -979,12 +1000,16 @@ class MainActivity: Activity() {
         heading(device,"应用与更新","检查新版、查看开源信息")
         lateinit var updates: TextView
         updates=setting(device,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
+        lateinit var about: TextView
+        about=setting(device,"关于果映 TV") {
+            tvTools.info("关于果映 TV","hongguoTV · 非官方客户端\n作者：tsukiyo-zero\n版本：${BuildConfig.VERSION_NAME}\n项目：https://github.com/tsukiyo-zero/hongguoTV\n\n本应用与红果官方无隶属关系。",about)
+        }
         val license=setting(device,"开源许可") {
             AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：tsukiyo-zero/hongguoTV。").setPositiveButton("关闭",null).show()
         }
         heading(playback,"红果账户","账户收藏、历史与预约随账号同步")
         val account=setting(playback,"登录与账户管理") { cloudAccount.show() }
-        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,account); val right=listOf(updates,license)
+        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,account); val right=listOf(updates,about,license)
         listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
             view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
             view.nextFocusDownId=items.getOrNull(index+1)?.id ?: view.id
@@ -992,19 +1017,19 @@ class MainActivity: Activity() {
         left.forEachIndexed { i,v -> v.nextFocusLeftId=v.id; v.nextFocusRightId=right[minOf(i,right.lastIndex)].id }
         right.forEachIndexed { i,v -> v.nextFocusLeftId=left[minOf(i,left.lastIndex)].id; v.nextFocusRightId=v.id }
         nav.forEach { it.nextFocusDownId=qualityButton.id }
-        parent.addView(text("红果 TV  /  ${BuildConfig.VERSION_NAME}    ·    本机记录独立保存，账户内容随登录账号切换",12f,muted).apply { setPadding(dp(2),dp(18),0,dp(10)) })
+        parent.addView(text("果映 TV  /  ${BuildConfig.VERSION_NAME}    ·    hongguoTV · 非官方客户端",12f,muted).apply { setPadding(dp(2),dp(18),0,dp(10)) })
         nav[tab].requestFocus()
     }
     private fun saveDiscoveryDraft() { (searchInput as? EditText)?.let { searchDraft=it.text.toString() } }
     private fun returnToDiscovery() {
-        query="";searchDraft="";page=1;catalog=emptyList();hasMore=false;catalogFocus=""
+        query="";searchDraft="";tvSearchOpen=false;page=1;catalog=emptyList();hasMore=false;catalogFocus=""
         (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(searchInput?.windowToken,0)
         showCatalog(load=false)
     }
     private fun runSearch(value: String) {
         val clean=value.trim().take(80); if(clean.isEmpty()) { returnToDiscovery();return }
         (searchInput as? EditText)?.let { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken,0) }
-        library.rememberSearch(clean,ContentType.SHORT);searchDraft=clean;query=clean;tab=1;page=1;catalogFocus="";showCatalog(true)
+        library.rememberSearch(clean,ContentType.SHORT);tvSearchOpen=true;searchDraft=clean;query=clean;tab=1;page=1;catalogFocus="";showCatalog(true)
     }
     private fun showSearchHistory(anchor: View) {
         val history=library.searches().distinctBy { it.query }
@@ -1624,6 +1649,7 @@ class MainActivity: Activity() {
     private fun goBack() {
         if(!library.isLoaded) { finish(); return }
         if(screen=="catalog" && tab==0 && homeFeed?.back()==true) return
+        if(screen=="catalog" && tab==1 && tvSearchPanel!=null) { returnToDiscovery();return }
         if(screen=="catalog" && tab==1 && query.isBlank() && !nav[1].hasFocus()) {
             discoveryScreen?.backToTop();nav[1].requestFocus();return
         }
