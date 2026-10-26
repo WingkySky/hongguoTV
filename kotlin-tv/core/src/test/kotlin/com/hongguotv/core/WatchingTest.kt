@@ -45,6 +45,85 @@ class WatchingTest {
     }
 
     @Test
+    fun cloudEpisodeIndexResolvesDifferentIdentifiersWithoutImportingHistory() {
+        val data = Detail(Series("1", "续播测试"), listOf("101", "102", "103"))
+        val cloud = CloudProgress(data.series, "999", 2, 45000, 90000, 2000)
+        val progress = ResumePlayback.progress(data, null, cloud)!!
+        assertEquals("103", progress.episodeId)
+        assertEquals(2, progress.episodeIndex)
+        assertEquals(
+            ResumeTarget(2, 45000),
+            ResumePlayback.target(
+                data.episodes,
+                progress.episodeId,
+                progress.position,
+                progress.completed,
+            ),
+        )
+        assertEquals("999", cloud.episodeId)
+    }
+
+    @Test
+    fun matchingCloudIdentityTakesPriorityOverItsStaleEpisodeNumber() {
+        val data = Detail(Series("1", "续播测试"), listOf("103", "101", "102"))
+        val cloud = CloudProgress(data.series, "103", 2, 45000, 90000, 2000)
+        val progress = ResumePlayback.progress(data, null, cloud)!!
+        assertEquals(0, progress.episodeIndex)
+        assertEquals("103", progress.episodeId)
+        assertEquals(45000, progress.position)
+    }
+
+    @Test
+    fun invalidCloudEpisodeOrDifferentSeriesCannotCreateAFalseResumePosition() {
+        val data = Detail(Series("1", "续播测试"), listOf("101", "102", "103"))
+        val cloud = CloudProgress(data.series, "999", 20, 45000, 90000, 2000)
+        assertNull(ResumePlayback.progress(data, null, cloud))
+        assertNull(ResumePlayback.progress(data, null, cloud.copy(episodeIndex = -1)))
+        assertNull(
+            ResumePlayback.progress(
+                data,
+                null,
+                cloud.copy(series = Series("2", "其他剧"), episodeIndex = 2),
+            )
+        )
+    }
+
+    @Test
+    fun genericDetailUsesNewestProgressWhileExplicitCloudHistoryHonorsItsSource() {
+        val data = Detail(Series("1", "续播测试"), listOf("101", "102", "103"))
+        val local = BackupProgress(data.series, "102", 1, 12000, 90000, false, 3000)
+        val cloud = CloudProgress(data.series, "999", 2, 45000, 90000, 2000)
+        assertEquals(local, ResumePlayback.progress(data, local, cloud))
+        assertEquals(
+            "103",
+            ResumePlayback.progress(data, local, cloud.copy(updatedAt = 4000))!!.episodeId,
+        )
+        assertEquals(
+            "103",
+            ResumePlayback.progress(data, local, cloud, preferCloud = true)!!.episodeId,
+        )
+        assertEquals(local, ResumePlayback.progress(data, local, cloud.copy(updatedAt = 3000)))
+    }
+
+    @Test
+    fun unavailableCloudProgressKeepsLocalCompletionAndFirstEpisodeFallback() {
+        val data = Detail(Series("1", "续播测试"), listOf("101", "102", "103"))
+        val local = BackupProgress(data.series, "102", 1, 12000, 90000, true, 3000)
+        assertEquals(local, ResumePlayback.progress(data, local, null))
+        assertNull(ResumePlayback.progress(data, null, null))
+        val progress = ResumePlayback.progress(data, local, null)!!
+        assertEquals(
+            ResumeTarget(2, 0),
+            ResumePlayback.target(
+                data.episodes,
+                progress.episodeId,
+                progress.position,
+                progress.completed,
+            ),
+        )
+    }
+
+    @Test
     fun `automatic recovery is bounded until the user starts a new attempt`() {
         val budget = RecoveryBudget()
         assertEquals(1000L, budget.delayMillis)

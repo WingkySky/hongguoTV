@@ -2,19 +2,50 @@
 package com.hongguotv.nativeapp
 
 import android.util.Log
+import com.hongguotv.core.ContentHttpException
 import com.hongguotv.core.ContentRepository
+import com.hongguotv.core.EmptyPlaybackResponseException
 import com.hongguotv.core.PlaybackQuality
 import com.hongguotv.core.RemoteVideo
 import com.hongguotv.core.Rendition
 import com.hongguotv.core.VideoTracks
 import okhttp3.OkHttpClient
 
+/** 只展示已知错误类别，不把响应正文、媒体地址或查询凭据带到界面和日志。 */
+internal fun playbackFailureSummary(problem: Throwable): String {
+    val causes = generateSequence(problem) { it.cause }.take(8).toList()
+    if (causes.any { it is EmptyPlaybackResponseException }) return "播放信息接口返回空响应"
+    causes.filterIsInstance<ContentHttpException>().firstOrNull()?.let {
+        return "播放信息请求失败（HTTP ${it.statusCode}）"
+    }
+    causes
+        .mapNotNull { it.message }
+        .firstOrNull { it.matches(Regex("播放接口暂不可用（错误码 \\d+）")) }
+        ?.let {
+            return it
+        }
+    if (causes.any { it is java.net.SocketTimeoutException }) return "网络请求超时"
+    if (causes.any { it is java.net.UnknownHostException }) return "无法解析服务器域名"
+    if (causes.any { it is java.io.EOFException }) return "视频分段提前断开"
+    val known = setOf("播放请求已取消", "播放准备已取消", "视频分段范围不匹配", "视频资源已变化，请重试", "播放信息为空", "播放地址格式异常")
+    causes
+        .mapNotNull { it.message }
+        .firstOrNull { it in known }
+        ?.let {
+            return it
+        }
+    if (problem is androidx.media3.common.PlaybackException) return "播放器错误：${problem.errorCodeName}"
+    return if (causes.any { it is java.io.IOException }) "播放数据读取失败" else "播放准备失败"
+}
+
 internal class OpenedStream(
     val video: RemoteVideo,
     val rendition: Rendition?,
     val tiers: List<Rendition>,
     val track: VideoTracks.Track?,
-)
+) : java.io.Closeable {
+    override fun close() = video.close()
+}
 
 /**
  * Opens the first rendition the device can actually decode: select by API metadata, then verify the
@@ -27,9 +58,10 @@ internal fun openStream(
     maxQuality: Int,
     supportsRendition: (Rendition) -> Boolean,
     initialBytes: Int = 256 * 1024,
+    metadataAhead: List<String> = emptyList(),
     supportsTrack: (VideoTracks.Track?) -> Boolean,
 ): OpenedStream? {
-    val ladder = repository.streamLadder(id)
+    val ladder = repository.streamLadder(id, metadataAhead)
     for (rendition in ladder.playbackOrder(maxQuality, supportsRendition)) {
         val video = RemoteVideo(http, rendition.toStreamInfo())
         try {

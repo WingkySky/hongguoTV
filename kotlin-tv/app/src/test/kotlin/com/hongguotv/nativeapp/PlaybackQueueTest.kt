@@ -6,10 +6,14 @@ import android.widget.TextView
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
 import java.lang.reflect.Proxy
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import okhttp3.OkHttpClient
 import org.junit.Assert.*
 import org.junit.Test
@@ -36,6 +40,19 @@ class PlaybackQueueTest {
         val method = target.javaClass.declaredMethods.single { it.name == name }
         method.isAccessible = true
         return method.invoke(target, *args)
+    }
+
+    private fun blockDuplicateMetadataRequests(activity: MainActivity): AtomicInteger {
+        val requests = AtomicInteger()
+        val http =
+            OkHttpClient.Builder()
+                .addInterceptor {
+                    requests.incrementAndGet()
+                    throw java.io.IOException("测试禁止重复获取播放信息")
+                }
+                .build()
+        set(activity, "repository", ContentRepository(http))
+        return requests
     }
 
     private class QueuePlayer {
@@ -72,6 +89,17 @@ class PlaybackQueueTest {
                     }
                     "seekToNextMediaItem" -> {
                         index++
+                        null
+                    }
+                    "clearMediaItems" -> {
+                        items.clear()
+                        index = 0
+                        null
+                    }
+                    "setMediaSource" -> {
+                        items.clear()
+                        items += (args!![0] as MediaSource).mediaItem
+                        index = 0
                         null
                     }
                     else ->
@@ -179,4 +207,147 @@ class PlaybackQueueTest {
         assertEquals(1, fake.items.size)
         assertNull(get(activity, "queuedNext"))
     }
+
+    @Test
+    fun switchingToAnInFlightNextEpisodeDoesNotCancelAndRestartItsPreparation() =
+        fixture { activity, fake, library, remote ->
+            val metadataRequests = blockDuplicateMetadataRequests(activity)
+            @Suppress("UNCHECKED_CAST")
+            val slot = get(activity, "preparedNext") as PreparedSlot<RemoteVideo>
+            val key = "102:${library.maxQuality}"
+            assertSame(remote, slot.take(key))
+            val ticket = slot.begin(key)
+            val started = CountDownLatch(1)
+            val finish = CountDownLatch(1)
+            val worker = get(activity, "prefetchWorker") as ExecutorService
+            val scope = RequestScope()
+            val http = OkHttpClient()
+            val job =
+                worker.submit {
+                    started.countDown()
+                    finish.await(5, TimeUnit.SECONDS)
+                    slot.complete(ticket, key, remote)
+                }
+            try {
+                assertTrue(started.await(5, TimeUnit.SECONDS))
+                set(activity, "prefetchedFor", key)
+                set(activity, "prefetchJob", job)
+                set(activity, "prefetchScope", scope)
+                set(activity, "prefetchHttp", http)
+                set(activity, "playerView", PlayerView(activity))
+                set(activity, "hud", LinearLayout(activity))
+                set(activity, "playbackText", TextView(activity))
+                set(activity, "progressBar", android.widget.ProgressBar(activity))
+                invoke(activity, "playEpisode", 1, 0L, true, false, false)
+                assertFalse(
+                    "Switching to the next episode must retain its running request",
+                    job.isCancelled,
+                )
+                finish.countDown()
+                (get(activity, "workJob") as Future<*>).get(5, TimeUnit.SECONDS)
+                ShadowLooper.idleMainLooper()
+                assertSame(remote, get(activity, "video"))
+                assertSame(http, get(activity, "playbackHttp"))
+                assertEquals(1, get(activity, "episodeIndex"))
+                assertEquals("102", fake.items.single().mediaId)
+                assertEquals(0, metadataRequests.get())
+            } finally {
+                finish.countDown()
+            }
+        }
+
+    @Test
+    fun nextTransportKeepsSessionAndPlaybackTimeoutsButOwnsItsCancellation() =
+        fixture { activity, _, _, _ ->
+            val root = (get(activity, "repository") as ContentRepository).http
+            val transport = invoke(activity, "newPrefetchTransport") as OkHttpClient
+            try {
+                assertSame(root.cookieJar, transport.cookieJar)
+                assertEquals(root.connectTimeoutMillis, transport.connectTimeoutMillis)
+                assertEquals(root.readTimeoutMillis, transport.readTimeoutMillis)
+                assertEquals(root.callTimeoutMillis, transport.callTimeoutMillis)
+                assertNotSame(root.dispatcher, transport.dispatcher)
+                assertNotSame(root.connectionPool, transport.connectionPool)
+                transport.dispatcher.cancelAll()
+                assertFalse(root.dispatcher.executorService.isShutdown)
+            } finally {
+                transport.connectionPool.evictAll()
+                transport.dispatcher.executorService.shutdown()
+            }
+        }
+
+    @Test
+    fun automaticRecoveryKeepsTheActualFailureVisible() = fixture { activity, _, _, _ ->
+        val text = TextView(activity)
+        set(activity, "hud", LinearLayout(activity))
+        set(activity, "playbackText", text)
+        set(activity, "progressBar", android.widget.ProgressBar(activity))
+        invoke(
+            activity,
+            "playerFailure",
+            PlaybackException(
+                "fixture",
+                EmptyPlaybackResponseException(),
+                PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+            ),
+        )
+        assertTrue(text.text.toString().contains("播放信息接口返回空响应"))
+        assertTrue(get(activity, "playError") == true)
+    }
+
+    @Test
+    fun leavingWhileWaitingCancelsPromotedRequestAndClosesALateResult() =
+        fixture { activity, _, library, remote ->
+            val metadataRequests = blockDuplicateMetadataRequests(activity)
+            @Suppress("UNCHECKED_CAST")
+            val slot = get(activity, "preparedNext") as PreparedSlot<RemoteVideo>
+            val key = "102:${library.maxQuality}"
+            assertSame(remote, slot.take(key))
+            val ticket = slot.begin(key)
+            val started = CountDownLatch(1)
+            val finish = CountDownLatch(1)
+            val worker = get(activity, "prefetchWorker") as ExecutorService
+            val root = (get(activity, "repository") as ContentRepository).http
+            val http = invoke(activity, "newPrefetchTransport") as OkHttpClient
+            val job =
+                worker.submit {
+                    started.countDown()
+                    try {
+                        finish.await(5, TimeUnit.SECONDS)
+                    } catch (_: InterruptedException) {
+                        // 模拟取消时已经在返回途中的结果，确保迟到资源也会被关闭。
+                        finish.await(5, TimeUnit.SECONDS)
+                    }
+                    slot.complete(ticket, key, remote)
+                }
+            try {
+                assertTrue(started.await(5, TimeUnit.SECONDS))
+                set(activity, "prefetchedFor", key)
+                set(activity, "prefetchJob", job)
+                set(activity, "prefetchScope", RequestScope())
+                set(activity, "prefetchHttp", http)
+                set(activity, "playerView", PlayerView(activity))
+                set(activity, "hud", LinearLayout(activity))
+                set(activity, "playbackText", TextView(activity))
+                set(activity, "progressBar", android.widget.ProgressBar(activity))
+                invoke(activity, "playEpisode", 1, 0L, true, false, false)
+                assertFalse(job.isCancelled)
+                invoke(activity, "invalidatePage")
+                assertTrue(job.isCancelled)
+                assertNull(get(activity, "promotedPreparation"))
+                finish.countDown()
+                worker.submit {}.get(5, TimeUnit.SECONDS)
+                (get(activity, "networkCleanup") as ExecutorService)
+                    .submit {}
+                    .get(5, TimeUnit.SECONDS)
+                ShadowLooper.idleMainLooper()
+                assertFalse(slot.isFresh(key))
+                assertThrows(java.io.IOException::class.java) { remote.read(0, 1) }
+                assertTrue(http.dispatcher.executorService.isShutdown)
+                assertFalse(root.dispatcher.executorService.isShutdown)
+                assertEquals(0, metadataRequests.get())
+            } finally {
+                finish.countDown()
+            }
+        }
 }

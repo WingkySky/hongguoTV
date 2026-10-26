@@ -48,6 +48,16 @@ class MainActivity : Activity() {
         PreparedSlot<RemoteVideo>({ android.os.SystemClock.elapsedRealtime() })
     private var prefetchJob: java.util.concurrent.Future<*>? = null
     private var prefetchScope: RequestScope? = null
+
+    private data class PendingEpisodePreparation(
+        val key: String,
+        val job: java.util.concurrent.Future<*>,
+        val scope: RequestScope,
+        val http: okhttp3.OkHttpClient,
+    )
+
+    private var promotedPreparation: PendingEpisodePreparation? = null
+    private var lastPlaybackFailure = ""
     private var queuedNext: RemoteVideo? = null
     private var queuedHttp: okhttp3.OkHttpClient? = null
     private var queuedEpisode = -1
@@ -62,6 +72,9 @@ class MainActivity : Activity() {
     private var initialCatalogPending = true
     private var restoreStoppedPage = false
     private var pendingDetail: Series? = null
+    // 仅在当前详情中保留云端续播信息，并按账号会话隔离，不预先导入本机历史。
+    private var detailCloudProgress: CloudProgress? = null
+    private var detailCloudScope = -1
     private var detailAutoplay = true
     private var libraryLoadError: Throwable? = null
     private var workScope: RequestScope? = null
@@ -106,7 +119,13 @@ class MainActivity : Activity() {
     private lateinit var tvTools: TvTools
     private lateinit var updater: AppUpdater
 
-    private data class DetailVisit(val detail: Detail, val episode: Int, val group: Int)
+    private data class DetailVisit(
+        val detail: Detail,
+        val episode: Int,
+        val group: Int,
+        val cloudProgress: CloudProgress?,
+        val cloudScope: Int,
+    )
 
     private val detailTrail = java.util.ArrayDeque<DetailVisit>()
     private var relatedSection: RelatedWorksView? = null
@@ -519,6 +538,7 @@ class MainActivity : Activity() {
         workScope = null
         workJob?.cancel(true)
         workJob = null
+        cancelPromotedPreparation()
         (io as? java.util.concurrent.ThreadPoolExecutor)?.purge()
     }
 
@@ -583,7 +603,7 @@ class MainActivity : Activity() {
                     val result = scope.run(action)
                     main.post {
                         val discard = {
-                            if (result is RemoteVideo) result.close()
+                            if (result is java.io.Closeable) result.close()
                             Unit
                         }
                         if (isDestroyed || generation != ticket) discard()
@@ -2329,6 +2349,9 @@ class MainActivity : Activity() {
         if (!fromRelated) detailTrail.clear()
         relatedSection = null
         val accountScope = cloudAccount.historyScope
+        detailCloudScope = accountScope
+        detailCloudProgress =
+            cloudProgress ?: if (!resume) cloudAccount.progress(series.id) else null
         pendingDetail = series
         detailAutoplay = autoplay
         invalidatePage()
@@ -2356,19 +2379,7 @@ class MainActivity : Activity() {
                     showCatalog()
                     return@work
                 }
-                val remote = if (resume) cloudProgress else null
-                val progress =
-                    remote?.let {
-                        WatchProgress(
-                            it.series,
-                            it.episodeId,
-                            it.episodeIndex,
-                            it.position,
-                            it.duration,
-                            false,
-                            it.updatedAt,
-                        )
-                    } ?: library.progress(series.id)
+                val progress = detailProgress(result, preferCloud = cloudProgress != null)
                 val target =
                     ResumePlayback.target(
                         result.episodes,
@@ -2390,6 +2401,16 @@ class MainActivity : Activity() {
             },
         )
     }
+
+    private fun detailProgress(data: Detail, preferCloud: Boolean = false): WatchProgress? =
+        ResumePlayback.progress(
+            data,
+            library.progress(data.series.id),
+            detailCloudProgress?.takeIf {
+                cloudAccount.signedIn && detailCloudScope == cloudAccount.historyScope
+            },
+            preferCloud,
+        )
 
     private fun showDetail(focusEpisode: Boolean) {
         invalidatePage()
@@ -2432,7 +2453,7 @@ class MainActivity : Activity() {
         val actions = row()
         actions.setPadding(0, dp(12), 0, 0)
         info.addView(actions)
-        val progress = library.progress(data.series.id)
+        val progress = detailProgress(data)
         val resumeIndex =
             progress?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n >= 0 } } ?: 0
         val watched = library.watched(data.series.id)
@@ -2449,10 +2470,16 @@ class MainActivity : Activity() {
                 if (watched) "重新观看"
                 else if (progress != null) "继续第 ${continueTarget.index+1} 集" else "开始观看",
             ) {
-                playEpisode(
-                    if (watched) 0 else continueTarget.index,
-                    if (watched) 0 else continueTarget.position,
-                )
+                // 点击时重新读取进度，避免账号切换后仍使用界面创建时捕获的旧账号记录。
+                val current = detailProgress(data)
+                val target =
+                    ResumePlayback.target(
+                        data.episodes,
+                        current?.episodeId,
+                        current?.position ?: 0,
+                        current?.completed == true,
+                    )
+                playEpisode(if (watched) 0 else target.index, if (watched) 0 else target.position)
             }
         lateinit var detailComments: TextView
         detailComments =
@@ -2531,7 +2558,7 @@ class MainActivity : Activity() {
             }
         content.addView(groupRow)
         content.addView(
-            text("橙色为当前集 · 上次为本机续播位置 · 方向键选择，确定播放", 12f, muted).apply { setPadding(0, 0, 0, dp(6)) }
+            text("橙色为当前集 · 上次为续播位置 · 方向键选择，确定播放", 12f, muted).apply { setPadding(0, 0, 0, dp(6)) }
         )
         val episodes = mutableListOf<View>()
         (group * 20 until minOf((group + 1) * 20, data.episodes.size))
@@ -2549,13 +2576,13 @@ class MainActivity : Activity() {
                                 else ""),
                             index == episodeIndex,
                         ) {
+                            val current = detailProgress(data)
                             playEpisode(
                                 index,
                                 if (
-                                    progress?.episodeId == data.episodes[index] &&
-                                        !progress.completed
+                                    current?.episodeId == data.episodes[index] && !current.completed
                                 )
-                                    progress.position
+                                    current.position
                                 else 0,
                             )
                         }
@@ -2645,7 +2672,15 @@ class MainActivity : Activity() {
                             )
                     } else {
                         if (detailTrail.size >= 10) detailTrail.removeFirst()
-                        detailTrail.addLast(DetailVisit(data, episodeIndex, group))
+                        detailTrail.addLast(
+                            DetailVisit(
+                                data,
+                                episodeIndex,
+                                group,
+                                detailCloudProgress,
+                                detailCloudScope,
+                            )
+                        )
                         openDetail(related.series, fromRelated = true)
                     }
                 },
@@ -2700,9 +2735,12 @@ class MainActivity : Activity() {
             player?.play()
             return
         }
+        val prepareKey = "${data.episodes[selectedIndex]}:${library.maxQuality}"
+        // 切到正在准备的下一集时接管原任务，不能先 take/clear 再取消，否则会重新请求同一集。
+        val pending =
+            if (position == 0L && !recovering) claimPendingPreparation(prepareKey) else null
         val prefetched =
-            if (position == 0L && !recovering)
-                preparedNext.take("${data.episodes[selectedIndex]}:${library.maxQuality}")
+            if (position == 0L && !recovering && pending == null) preparedNext.take(prepareKey)
             else null
         val claimedHttp =
             if (prefetched != null) prefetchHttp.also { prefetchHttp = null } else null
@@ -2717,7 +2755,7 @@ class MainActivity : Activity() {
         releaseCatalogViews()
         if (reuse) {
             cancelRecovery()
-            cancelPrefetch()
+            cancelPrefetchState(keepPrepared = pending != null)
             tvTools.close()
             episodePanel?.dismiss()
             episodePanel = null
@@ -2734,7 +2772,7 @@ class MainActivity : Activity() {
             main.removeCallbacks(hideHud)
             main.removeCallbacks(seekRunnable)
             pendingSeek = null
-        } else releasePlayer()
+        } else releasePlayer(keepPrepared = pending != null)
         artwork.cancelPage(clearMemory = true)
         playbackHttp = claimedHttp
         video = prefetched
@@ -2841,21 +2879,32 @@ class MainActivity : Activity() {
         val requestedId = data.episodes[episodeIndex]
         val maxQuality = library.maxQuality
         val ticket = generation
+        var usedPending = false
         work(
             {
-                prefetched?.let { OpenedStream(it, null, emptyList(), it.trackInfo()) }
+                val prepared =
+                    prefetched
+                        ?: pending?.let {
+                            awaitPreparedEpisode(it).also { ready -> usedPending = ready != null }
+                        }
+                prepared?.let { OpenedStream(it, null, emptyList(), it.trackInfo()) }
                     ?: openStream(
                         repository.http,
                         repository,
                         requestedId,
                         maxQuality,
                         CodecCapabilities::supports,
+                        metadataAhead = data.episodes.drop(selectedIndex + 1).take(2),
                     ) {
                         it == null || CodecCapabilities.supports(it)
                     }
                     ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")
             },
             { opened ->
+                if (promotedPreparation === pending) promotedPreparation = null
+                if (pending != null) {
+                    if (usedPending) playbackHttp = pending.http else closeTransport(pending.http)
+                }
                 val remote = opened.video
                 video = remote
                 quality = playedQualityLabel(opened, maxQuality)
@@ -3009,8 +3058,49 @@ class MainActivity : Activity() {
                 p.playWhenReady =
                     foreground && requestedAutoplay && !pausedForLifecycle && episodePanel == null
             },
-            { problem -> playerFailure(problem) },
+            { problem ->
+                cancelPromotedPreparation()
+                playerFailure(problem)
+            },
         )
+        // work() 会先取消上一项工作，因此在它建立新任务之后绑定本次接管资源。
+        promotedPreparation = pending
+    }
+
+    private fun claimPendingPreparation(key: String): PendingEpisodePreparation? {
+        if (prefetchedFor != key || preparedNext.isFresh(key)) return null
+        val job = prefetchJob?.takeIf { !it.isDone } ?: return null
+        val scope = prefetchScope ?: return null
+        val http = prefetchHttp ?: return null
+        prefetchJob = null
+        prefetchScope = null
+        prefetchHttp = null
+        prefetchedFor = ""
+        return PendingEpisodePreparation(key, job, scope, http)
+    }
+
+    private fun awaitPreparedEpisode(pending: PendingEpisodePreparation): RemoteVideo? {
+        try {
+            pending.job.get()
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw java.io.InterruptedIOException("播放准备已取消")
+        } catch (_: java.util.concurrent.ExecutionException) {
+            // 预加载失败只影响本次投机任务；正式播放仍可正常重新获取一次。
+        } catch (_: java.util.concurrent.CancellationException) {
+            throw java.io.InterruptedIOException("播放准备已取消")
+        }
+        if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("播放准备已取消")
+        return preparedNext.take(pending.key)
+    }
+
+    private fun cancelPromotedPreparation() {
+        val pending = promotedPreparation ?: return
+        promotedPreparation = null
+        pending.scope.cancel()
+        pending.job.cancel(true)
+        preparedNext.clear()
+        closeTransport(pending.http)
     }
 
     private fun closeTransport(http: okhttp3.OkHttpClient?) {
@@ -3024,10 +3114,14 @@ class MainActivity : Activity() {
     }
 
     private fun cancelPrefetch() {
+        cancelPrefetchState(keepPrepared = false)
+    }
+
+    private fun cancelPrefetchState(keepPrepared: Boolean) {
         clearQueuedEpisode()
         prefetchScope?.cancel()
         prefetchScope = null
-        preparedNext.clear()
+        if (!keepPrepared) preparedNext.clear()
         prefetchJob?.cancel(true)
         prefetchJob = null
         closeTransport(prefetchHttp)
@@ -3050,6 +3144,7 @@ class MainActivity : Activity() {
         )
             return
         val id = data.episodes[episodeIndex + 1]
+        val metadataAhead = data.episodes.drop(episodeIndex + 2).take(2)
         val quality = library.maxQuality
         val key = "$id:$quality"
         if (preparedNext.isFresh(key) || prefetchJob?.isDone == false) return
@@ -3077,13 +3172,7 @@ class MainActivity : Activity() {
         prefetchAttemptAt = now
         prefetchAttempts++
         val ticket = preparedNext.begin(key)
-        val http =
-            okhttp3.OkHttpClient.Builder()
-                .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                .callTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-                .build()
-        val source = ContentRepository(http)
+        val http = newPrefetchTransport()
         prefetchHttp = http
         val scope = RequestScope()
         prefetchScope = scope
@@ -3094,27 +3183,43 @@ class MainActivity : Activity() {
                     val prepared =
                         scope.run {
                             val opened =
-                                openStream(http, source, id, quality, CodecCapabilities::supports) {
+                                // 播放地址复用当前 Repository 的设备身份和会话；仅视频传输独立取消。
+                                openStream(
+                                    http,
+                                    repository,
+                                    id,
+                                    quality,
+                                    CodecCapabilities::supports,
+                                    initialBytes = 32 * 1024,
+                                    metadataAhead = metadataAhead,
+                                ) {
                                     it == null || CodecCapabilities.supports(it)
                                 } ?: throw java.io.IOException("没有电视可播放的清晰度")
-                            opened.video.also {
-                                remote = it
-                                it.warm(PrefetchPolicy.WARM_BYTES)
-                            }
+                            opened.video.also { remote = it }
                         }
                     if (preparedNext.complete(ticket, key, prepared)) {
                         android.util.Log.i(
                             "HongguoTV",
-                            "Next episode opening buffered bytes=${PrefetchPolicy.WARM_BYTES}",
+                            "Next episode header ready; handing media buffering to playback queue",
                         )
                         main.post { queuePreparedEpisode(key) }
                     }
-                } catch (_: Exception) {
+                } catch (problem: Exception) {
                     remote?.close()
-                    android.util.Log.i("HongguoTV", "Next episode warmup cancelled or unavailable")
+                    android.util.Log.i(
+                        "HongguoTV",
+                        "Next episode preparation unavailable: ${problem.javaClass.simpleName}",
+                    )
                 }
             }
     }
+
+    private fun newPrefetchTransport(): okhttp3.OkHttpClient =
+        repository.http
+            .newBuilder()
+            .dispatcher(okhttp3.Dispatcher())
+            .connectionPool(okhttp3.ConnectionPool())
+            .build()
 
     private fun episodeSource(remote: RemoteVideo, id: String) =
         ProgressiveMediaSource.Factory { VideoDataSource(remote) }
@@ -3250,16 +3355,17 @@ class MainActivity : Activity() {
         if (!foreground || !playError || !autoRecovery || retryPending) return
         if (!recovery.remaining) {
             autoRecovery = false
-            playbackText.text = "已自动重试 3 次，仍无法播放。可手动重试或切换清晰度。"
+            playbackText.text = "$lastPlaybackFailure\n已自动重试 3 次，仍无法播放。可手动重试或切换清晰度。"
             return
         }
         if (!networkAvailable()) {
-            playbackText.text = "网络已断开，联网后自动续播 · 第 ${episodeIndex+1} 集 ${formatTime(retryPosition)}"
+            playbackText.text =
+                "$lastPlaybackFailure\n网络已断开，联网后自动续播 · 第 ${episodeIndex+1} 集 ${formatTime(retryPosition)}"
             return
         }
         val delay = recovery.delayMillis ?: return
         playbackText.text =
-            "${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
+            "$lastPlaybackFailure\n${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
         retryPending = true
         main.postDelayed(retryRunnable, delay)
     }
@@ -3308,6 +3414,7 @@ class MainActivity : Activity() {
     }
 
     private fun playerFailure(problem: Throwable) {
+        lastPlaybackFailure = playbackFailureSummary(problem)
         retryPosition = currentPosition().coerceAtLeast(0)
         retryAutoplay = requestedAutoplay && !sleepStopped
         saveProgress()
@@ -3356,7 +3463,7 @@ class MainActivity : Activity() {
                 problem.errorCode in 2000..2999 ||
                     problem.errorCode == PlaybackException.ERROR_CODE_TIMEOUT
             else problem is java.io.IOException
-        playbackText.text = if (decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "播放失败，可重试或切换清晰度。"
+        playbackText.text = if (decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "$lastPlaybackFailure · 可手动重试"
         val actions = row()
         controls.addView(actions)
         addButton(actions, "立即重试") { playEpisode(episodeIndex, retryPosition, retryAutoplay) }
@@ -3379,7 +3486,7 @@ class MainActivity : Activity() {
         }
         android.util.Log.w(
             "HongguoTV",
-            "Playback failure: ${problem.javaClass.simpleName}" +
+            "Playback failure: ${problem.javaClass.simpleName}; reason=$lastPlaybackFailure" +
                 (if (problem is PlaybackException) " code=${problem.errorCodeName}" else ""),
         )
     }
@@ -3815,10 +3922,10 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun releasePlayer() {
+    private fun releasePlayer(keepPrepared: Boolean = false) {
         social.reset()
         cancelRecovery()
-        cancelPrefetch()
+        cancelPrefetchState(keepPrepared)
         mediaSession.deactivate()
         tvTools.close()
         val wasForeground = foreground
@@ -3886,6 +3993,8 @@ class MainActivity : Activity() {
                 if (previous == null) showCatalog()
                 else {
                     detail = previous.detail
+                    detailCloudProgress = previous.cloudProgress
+                    detailCloudScope = previous.cloudScope
                     episodeIndex = previous.episode
                     group = previous.group
                     showDetail(false)
@@ -4003,8 +4112,25 @@ class MainActivity : Activity() {
                     "detail" ->
                         if (detail != null) showDetail(false)
                         else
-                            pendingDetail?.let { openDetail(it, directPlayback, autoplay = false) }
-                                ?: showCatalog()
+                            pendingDetail?.let {
+                                // 后台期间详情请求可能被取消；重试时保留显式云端续播来源。
+                                val cloud = detailCloudProgress
+                                if (
+                                    directPlayback &&
+                                        cloud != null &&
+                                        (!cloudAccount.signedIn ||
+                                            detailCloudScope != cloudAccount.historyScope)
+                                ) {
+                                    showCatalog()
+                                } else {
+                                    openDetail(
+                                        it,
+                                        directPlayback,
+                                        autoplay = false,
+                                        cloudProgress = cloud.takeIf { directPlayback },
+                                    )
+                                }
+                            } ?: showCatalog()
                     else ->
                         showCatalog(
                             load =
