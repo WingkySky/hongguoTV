@@ -34,6 +34,39 @@ class RecoveryBudget {
 data class ResumeTarget(val index: Int, val position: Long)
 
 object ResumePlayback {
+    // 生成本次播放的临时进度，不写入本机历史。
+    // 云端与官网的分集 ID 可能不同：先匹配 ID，无法匹配时才使用有效云端集号。
+    fun progress(
+        detail: Detail,
+        local: BackupProgress?,
+        cloud: CloudProgress?,
+        preferCloud: Boolean = false,
+    ): BackupProgress? {
+        val device = local?.takeIf { it.series.id == detail.series.id }
+        val remote =
+            cloud
+                ?.takeIf { it.series.id == detail.series.id }
+                ?.let {
+                    val index =
+                        detail.episodes.indexOf(it.episodeId).takeIf { n -> n >= 0 }
+                            ?: it.episodeIndex.takeIf { n -> n in detail.episodes.indices }
+                            ?: return@let null
+                    BackupProgress(
+                        detail.series,
+                        detail.episodes[index],
+                        index,
+                        it.position.coerceAtLeast(0),
+                        it.duration.coerceAtLeast(0),
+                        false,
+                        it.updatedAt,
+                    )
+                }
+        // 明确点击账户历史时采用该条云端记录；普通详情入口选较新的记录，同时间优先本机。
+        return if (preferCloud && remote != null) remote
+        else if (remote != null && (device == null || remote.updatedAt > device.updatedAt)) remote
+        else device
+    }
+
     fun target(
         episodes: List<String>,
         episodeId: String?,

@@ -5,6 +5,21 @@ import org.junit.Test
 
 class PlaybackSourcesTest {
     @Test
+    fun failureSummaryKeepsTheRealCauseWithoutLeakingAddressesOrResponseText() {
+        val empty = com.hongguotv.core.EmptyPlaybackResponseException()
+        assertEquals("播放信息接口返回空响应", playbackFailureSummary(empty))
+        assertEquals(
+            "播放信息请求失败（HTTP 503）",
+            playbackFailureSummary(com.hongguotv.core.ContentHttpException(503)),
+        )
+        assertEquals("视频分段提前断开", playbackFailureSummary(java.io.EOFException("fixture")))
+        val unknown =
+            playbackFailureSummary(java.io.IOException("https://example.com/video?token=test-only"))
+        assertFalse(unknown.contains("https://"))
+        assertFalse(unknown.contains("token"))
+    }
+
+    @Test
     fun manualRetryOnlyOffersLowerTierThanAttempted() {
         assertEquals(720, nextLowerQuality(1080))
         assertEquals(480, nextLowerQuality(720))
