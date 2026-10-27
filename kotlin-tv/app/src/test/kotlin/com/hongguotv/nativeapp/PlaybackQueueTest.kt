@@ -1,6 +1,5 @@
 package com.hongguotv.nativeapp
 
-import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.media3.common.*
@@ -51,7 +50,11 @@ class PlaybackQueueTest {
                     throw java.io.IOException("测试禁止重复获取播放信息")
                 }
                 .build()
-        set(activity, "repository", ContentRepository(http))
+        set(
+            activity,
+            "repository",
+            ContentRepository(http, playbackSession = testPlaybackDeviceSession()),
+        )
         return requests
     }
 

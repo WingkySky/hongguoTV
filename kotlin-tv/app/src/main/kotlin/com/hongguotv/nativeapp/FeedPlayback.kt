@@ -62,6 +62,7 @@ internal class PublicFeedBackend(
             .build(),
     account: AccountCredentials? = null,
     private val startupCache: FeedStartupCache? = null,
+    playbackSession: PlaybackDeviceSession = PlaybackDeviceSession.shared,
 ) : FeedBackend {
     companion object {
         // Reuse idle public TLS connections across homepage visits. Dispatchers remain per backend,
@@ -70,7 +71,7 @@ internal class PublicFeedBackend(
     }
 
     private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
-    private val repository = ContentRepository(http)
+    private val repository = ContentRepository(http, playbackSession = playbackSession)
     private val recommendationAccount = account
     private val cacheIdentity =
         account?.let {
