@@ -164,7 +164,7 @@ class ContentRepositoryTest {
     }
 
     @Test
-    fun playbackUsesUnsignedIndependentIdentifiersAndKeepsThemAcrossEpisodes() {
+    fun playbackUsesUnsignedRegisteredIdentifiersAndKeepsThemAcrossEpisodes() {
         val requests = mutableListOf<Request>()
         val repo = repository { request ->
             requests += request
@@ -182,7 +182,7 @@ class ContentRepositoryTest {
             assertTrue(request.header("User-Agent").orEmpty().contains("tt-ok/"))
             for (key in listOf("iid", "device_id")) {
                 val value = request.url.queryParameter(key)!!
-                assertTrue(value.matches(Regex("3[0-9]{18}")))
+                assertEquals(if (key == "iid") "444" else "333", value)
                 assertNotEquals(VendorConstants.device[key], value)
                 assertEquals(requests.first().url.queryParameter(key), value)
             }
@@ -514,6 +514,7 @@ class ContentRepositoryTest {
                 }
                 .build(),
             clock,
+            PlaybackDeviceSession { DeviceRegister.Registered("333", "444") },
         )
 
     private fun rankPayload(page: Int = 1, totalPages: Int = 2) =

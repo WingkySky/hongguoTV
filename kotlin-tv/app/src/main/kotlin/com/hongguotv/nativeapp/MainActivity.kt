@@ -37,7 +37,7 @@ class MainActivity : Activity() {
     private val muted = TvStyle.muted
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(3)
-    private val repository = ContentRepository()
+    private val repository = ContentRepository(playbackSession = PlaybackDeviceSession.shared)
     // 榜单专用并行加载通道：最多四榜各自在途、互不取消，与全局单飞 work() 隔离。
     private val rankWorker = Executors.newFixedThreadPool(3)
     private val networkCleanup = Executors.newSingleThreadExecutor()

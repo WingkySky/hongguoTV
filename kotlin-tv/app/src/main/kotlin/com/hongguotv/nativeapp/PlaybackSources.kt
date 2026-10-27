@@ -14,6 +14,8 @@ import okhttp3.OkHttpClient
 /** 只展示已知错误类别，不把响应正文、媒体地址或查询凭据带到界面和日志。 */
 internal fun playbackFailureSummary(problem: Throwable): String {
     val causes = generateSequence(problem) { it.cause }.take(8).toList()
+    if (causes.any { it is com.hongguotv.core.PlaybackDeviceRegistrationException })
+        return "播放设备注册失败"
     if (causes.any { it is EmptyPlaybackResponseException }) return "播放信息接口返回空响应"
     causes.filterIsInstance<ContentHttpException>().firstOrNull()?.let {
         return "播放信息请求失败（HTTP ${it.statusCode}）"

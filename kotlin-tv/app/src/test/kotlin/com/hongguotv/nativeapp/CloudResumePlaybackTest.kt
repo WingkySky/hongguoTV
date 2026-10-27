@@ -72,7 +72,8 @@ class CloudResumePlaybackTest {
                                 .body(body.toResponseBody())
                                 .build()
                         }
-                        .build()
+                        .build(),
+                    playbackSession = testPlaybackDeviceSession(),
                 ),
             )
             test(activity, library, account)
