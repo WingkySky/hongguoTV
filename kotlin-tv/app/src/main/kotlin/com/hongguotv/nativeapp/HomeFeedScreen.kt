@@ -51,6 +51,8 @@ internal class HomeFeedScreen(
     private var active = false
     private var loading = false
     private var failed = false
+    private var lastPlaybackError: androidx.media3.common.PlaybackException? = null
+    private var healedFor: String? = null
     private val stage = FrameLayout(activity)
     private val title = label("发现下一部好剧", 25f)
     private val meta = label("第一集试播", 13f, TvStyle.accent)
@@ -258,6 +260,7 @@ internal class HomeFeedScreen(
                 else -> false
             }
         }
+        playback.onError = { error -> lastPlaybackError = error }
         playback.status = { value ->
             if (!closed && clip != null)
                 when (value) {
@@ -282,10 +285,12 @@ internal class HomeFeedScreen(
                         if (active && stage.hasFocus()) showActions()
                     }
                     TrialStatus.ERROR -> {
-                        status.visibility = View.VISIBLE
                         playback.pause()
-                        failed = true
-                        status.text = "试播暂不可用 · 可重试、换剧或查看全集"
+                        if (!selfHealTrial()) {
+                            failed = true
+                            status.visibility = View.VISIBLE
+                            status.text = "试播暂不可用 · 可重试、换剧或查看全集"
+                        }
                         paintActions()
                     }
                 }
@@ -445,6 +450,25 @@ internal class HomeFeedScreen(
         return cached.clip
     }
 
+    // 试播自愈：解码类失败写入设备能力经验表并自动换低档重载一次（每剧限一次）；
+    // 重载复用 loadCurrent（缓存/预取优先），与手动重试成本相同。不满足条件返回 false 走原面板。
+    private fun selfHealTrial(): Boolean {
+        val series = state.current ?: return false
+        val track = clip?.track
+        if (
+            !shouldSelfHealTrial(
+                lastPlaybackError?.errorCode,
+                track != null,
+                healedFor == series.id,
+            )
+        )
+            return false
+        CodecCapabilities.learnFailure(track!!.fourcc, track.width, track.height)
+        healedFor = series.id
+        loadCurrent("设备不支持该清晰度，正在自动切换…")
+        return true
+    }
+
     // 后台发起请求，主线程更新界面；页面关闭、切换或暂停后丢弃过期结果。
     private fun <T> request(action: () -> T, discard: (T) -> Unit = {}, done: (T) -> Unit) {
         cancelRequest()
@@ -507,14 +531,14 @@ internal class HomeFeedScreen(
     }
 
     // 优先复用缓存或正在进行的预加载，避免为同一部作品重复请求。
-    private fun loadCurrent() {
+    private fun loadCurrent(statusHint: String? = null) {
         val series = state.current ?: return
         if (!active || closed) return
         clearCurrent(keepPrefetch = prefetchTarget == series.id)
         failed = false
         describe()
         status.visibility = View.VISIBLE
-        status.text = "正在准备第一集试播…"
+        status.text = statusHint ?: "正在准备第一集试播…"
         trimCache()
         val cached = takeCached(series.id)
         if (cached != null) attach(cached)
