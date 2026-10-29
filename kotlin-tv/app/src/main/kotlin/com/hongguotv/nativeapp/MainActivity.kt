@@ -3463,13 +3463,20 @@ class MainActivity : Activity() {
                 problem.errorCode in 2000..2999 ||
                     problem.errorCode == PlaybackException.ERROR_CODE_TIMEOUT
             else problem is java.io.IOException
-        playbackText.text = if (decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "$lastPlaybackFailure · 可手动重试"
+        // 按钮直接指向阶梯里真实存在的更低档：没有就明说，不再让用户循环点一个必然重放
+        // 同一流（如本集仅剩电视解不了的 1080P）的按钮。
+        val lowerTier = nextLowerQuality(attemptedQuality, currentTiers)
+        playbackText.text =
+            when {
+                decoding && lowerTier != null -> "电视无法解码当前视频，可尝试更低清晰度。"
+                decoding -> "电视无法解码当前视频，本集没有更低清晰度可用。"
+                else -> "$lastPlaybackFailure · 可手动重试"
+            }
         val actions = row()
         controls.addView(actions)
         addButton(actions, "立即重试") { playEpisode(episodeIndex, retryPosition, retryAutoplay) }
             .requestFocus()
-        nextLowerQuality(if (attemptedQuality > 0) attemptedQuality else library.maxQuality)?.let {
-            lower ->
+        lowerTier?.let { lower ->
             addButton(actions, "尝试 ${lower}P") {
                 library.maxQuality = lower
                 playEpisode(episodeIndex, retryPosition, retryAutoplay)

@@ -20,10 +20,28 @@ class PlaybackSourcesTest {
     }
 
     @Test
-    fun manualRetryOnlyOffersLowerTierThanAttempted() {
-        assertEquals(720, nextLowerQuality(1080))
-        assertEquals(480, nextLowerQuality(720))
-        assertNull(nextLowerQuality(480))
+    fun manualRetryOffersTheLowestLadderTierBelowAttempted() {
+        val ladder =
+            listOf(
+                com.hongguotv.core.Rendition(1080, "h264", 1080, 1920, "u1", null),
+                com.hongguotv.core.Rendition(720, "h264", 720, 1280, "u2", null),
+                com.hongguotv.core.Rendition(540, "h264", 540, 960, "u3", null),
+                com.hongguotv.core.Rendition(480, "h264", 480, 854, "u4", null),
+                com.hongguotv.core.Rendition(360, "h264", 360, 640, "u5", null),
+            )
+        assertEquals(360, nextLowerQuality(1080, ladder))
+        assertEquals(360, nextLowerQuality(720, ladder))
+        assertNull(nextLowerQuality(360, ladder))
+        assertNull(nextLowerQuality(1080, ladder.take(1))) // 阶梯只剩当前档，不给无效按钮
+        assertNull(nextLowerQuality(1080, emptyList()))
+        assertNull(nextLowerQuality(0, ladder)) // 未知已尝试档位
+        // 未知档位（quality=0）不作为降档目标
+        val withUnknown =
+            listOf(
+                com.hongguotv.core.Rendition(0, "h264", 0, 0, "u0", null),
+                com.hongguotv.core.Rendition(480, "h264", 480, 854, "u4", null),
+            )
+        assertEquals(480, nextLowerQuality(1080, withUnknown))
     }
 
     @Test

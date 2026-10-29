@@ -5,7 +5,6 @@ import android.util.Log
 import com.hongguotv.core.ContentHttpException
 import com.hongguotv.core.ContentRepository
 import com.hongguotv.core.EmptyPlaybackResponseException
-import com.hongguotv.core.PlaybackQuality
 import com.hongguotv.core.RemoteVideo
 import com.hongguotv.core.Rendition
 import com.hongguotv.core.VideoTracks
@@ -84,9 +83,12 @@ internal fun openStream(
     return null
 }
 
-/** Next manual retry tier: only offer a lower option than what was already attempted. */
-internal fun nextLowerQuality(attempted: Int): Int? =
-    PlaybackQuality.options.filter { it < attempted }.maxOrNull()
+/**
+ * Lowest ladder tier strictly below the attempted quality — the manual button always plays exactly
+ * the tier it names. Null when the ladder has nothing lower, so no dead-end button is offered.
+ */
+internal fun nextLowerQuality(attempted: Int, tiers: List<Rendition>): Int? =
+    tiers.map { it.quality }.filter { it in 1 until attempted }.minOrNull()
 
 /**
  * Auto-downgrade is worth another attempt while budget remains and a strictly lower tier exists.
