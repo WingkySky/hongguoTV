@@ -673,8 +673,11 @@ constructor(
             cached
                 ?: run {
                     val ids = (listOf(id) + metadataAhead).distinct()
+                    // device_level=1 是服务端最保守的编码供给：level=3 会把部分剧集的 360P-720P
+                    // 档下发成 bytevc2（Android 提取器读不出视频轨，只能被过滤掉），该集便只剩
+                    // 1080P 一档，竖屏超出电视解码上限后降无可降；level=1 对正常集供给与 3 一致。
                     val payload =
-                        """{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":${JSONArray(ids)}}}"""
+                        """{"biz_param":{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":${JSONArray(ids)}}}"""
                             .toByteArray()
                     val identity = playbackSession.profile(http)
                     val query = Signer.encode(identity.values + ("_rticket" to clock().toString()))

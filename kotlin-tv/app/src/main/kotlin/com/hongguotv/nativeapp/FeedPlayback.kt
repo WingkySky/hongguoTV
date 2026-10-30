@@ -21,6 +21,7 @@ internal data class TrialClip(
     val detail: Detail,
     val video: RemoteVideo,
     val episodeCount: Int = detail.episodes.size,
+    val track: VideoTracks.Track? = null,
 ) : Closeable {
     val episodeId
         get() = detail.episodes.first()
@@ -147,24 +148,22 @@ internal class PublicFeedBackend(
 
     override fun detail(series: Series) = timed("detail") { repository.detail(series.id) }
 
-    private fun open(id: String): RemoteVideo {
-        val opened =
-            openStream(
-                http,
-                repository,
-                id,
-                quality,
-                CodecCapabilities::supports,
-                initialBytes = 32 * 1024,
-            ) {
-                it == null || CodecCapabilities.supports(it)
-            } ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
-        return opened.video
-    }
+    private fun open(id: String): OpenedStream =
+        openStream(
+            http,
+            repository,
+            id,
+            quality,
+            CodecCapabilities::supports,
+            initialBytes = 32 * 1024,
+        ) {
+            it == null || CodecCapabilities.supports(it)
+        } ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
 
     override fun prepare(detail: Detail): TrialClip {
         val id = detail.episodes.firstOrNull() ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
-        return TrialClip(detail, open(id))
+        val opened = open(id)
+        return TrialClip(detail, opened.video, track = opened.track)
     }
 
     override fun trial(series: Series): TrialClip {
@@ -194,10 +193,12 @@ internal class PublicFeedBackend(
                     }
                     verified
                 }
+        val opened = timed("play-address") { open(hint.episodeId) }
         return TrialClip(
             Detail(series, listOf(hint.episodeId)),
-            timed("play-address") { open(hint.episodeId) },
+            opened.video,
             hint.episodeCount,
+            opened.track,
         )
     }
 
@@ -254,7 +255,27 @@ internal interface TrialPlayback {
     fun clear()
 
     fun release()
+
+    /** 播放器级错误（含错误码），供上层做解码经验学习；status(ERROR) 仍会触发。默认 no-op。 */
+    var onError: ((PlaybackException) -> Unit)?
+        get() = null
+        set(_) {}
 }
+
+/**
+ * 试播自愈判定：解码类失败 + 有可学习的轨道信息 + 该剧本次会话尚未自愈过。网络类错误与缺失
+ * 轨道（无法定位学习键）不自愈。
+ */
+internal fun shouldSelfHealTrial(
+    errorCode: Int?,
+    hasTrack: Boolean,
+    alreadyHealed: Boolean,
+): Boolean =
+    errorCode != null &&
+        errorCode in PlaybackException.ERROR_CODE_DECODER_INIT_FAILED..
+                PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED &&
+        hasTrack &&
+        !alreadyHealed
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class Media3TrialPlayback(context: Context) : TrialPlayback {
@@ -312,6 +333,7 @@ internal class Media3TrialPlayback(context: Context) : TrialPlayback {
         get() = surface
 
     override var status: ((TrialStatus) -> Unit)? = null
+    override var onError: ((PlaybackException) -> Unit)? = null
     private var activeId: String? = null
     private var startedAt = 0L
 
@@ -354,7 +376,11 @@ internal class Media3TrialPlayback(context: Context) : TrialPlayback {
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
-                    if (active()) status?.invoke(TrialStatus.ERROR)
+                    if (active()) {
+                        // 先于 status(ERROR)：上层处理错误状态时需要已拿到错误码。
+                        onError?.invoke(error)
+                        status?.invoke(TrialStatus.ERROR)
+                    }
                 }
 
                 override fun onRenderedFirstFrame() {
