@@ -1,5 +1,9 @@
 package com.hongguotv.core
 
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
+
 fun main(args: Array<String>) {
     val repository = ContentRepository()
     if (args.contains("--category-recommendations")) {
@@ -99,6 +103,110 @@ fun main(args: Array<String>) {
                 )
             }
         } finally {
+            repository.http.connectionPool.evictAll()
+            repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
+    if (args.contains("--issue38")) {
+        // 复现 issue #38「播放信息接口返回空响应」：同一请求构造下对比设备身份、device_level、
+        // 备选 host 与时钟偏差。输出仅含计数与档位元数据，不打印地址与凭据。
+        val sessionA = PlaybackDeviceSession()
+        val sessionB = PlaybackDeviceSession()
+        val repo = ContentRepository(playbackSession = sessionB)
+        try {
+            val keyword =
+                args.getOrNull(args.indexOf("--issue38") + 1)?.takeIf { !it.startsWith("--") }
+                    ?: "美人替嫁祁王"
+            val found =
+                runCatching { repo.search(keyword) }.getOrElse { repo.searchAll(keyword) }
+            val series =
+                found.items.firstOrNull { it.title == "春色韫韫，美人替嫁祁王" }
+                    ?: found.items.firstOrNull { "美人替嫁祁王" in it.title }
+            checkNotNull(series) { "search=${found.items.size}; no match for $keyword" }
+            println("issue38 series=${series.title}; id=${series.id}")
+            val detail = repo.detail(series.id)
+            println("issue38 episodes=${detail.episodes.size}")
+            val episode8 = detail.episodes.getOrNull(7) ?: detail.episodes.first()
+            val targets =
+                listOfNotNull(
+                    detail.episodes.getOrNull(0)?.let { "ep1" to it },
+                    "ep8" to episode8,
+                )
+            val identityA = sessionA.profile(repo.http)
+            println(
+                "issue38 identity=A; storeRegion=${Regex("store-region=([^;]+)").find(identityA.cookie)?.groupValues?.get(1) ?: "none"}"
+            )
+            for ((label, episodeId) in targets) {
+                for (level in listOf(1, 3)) {
+                    println(
+                        "issue38 probe=$label; level=$level; ${playerProbe(repo.http, sessionA, episodeId, level, PLAYER_HOST_PRIMARY)}"
+                    )
+                }
+            }
+            // 失效分集 id 假设：收藏/历史里可能保存着下架或重发前的旧 id。
+            println(
+                "issue38 probe=bogus; level=1; ${playerProbe(repo.http, sessionA, "1", 1, PLAYER_HOST_PRIMARY)}"
+            )
+            for (host in PLAYER_HOST_FALLBACKS) {
+                println(
+                    "issue38 host=$host; ${playerProbe(repo.http, sessionA, episode8, 1, host)}"
+                )
+            }
+            // 端到端：与线上 streamLadder 完全一致（repository 自持身份 B，含三次退避重试）。
+            try {
+                val ladder = repo.streamLadder(episode8)
+                println(
+                    "issue38 e2e=ok; tiers=${ladder.renditions.size}; codecs=${ladder.renditions.joinToString { it.codec }}"
+                )
+            } catch (problem: Exception) {
+                println(
+                    "issue38 e2e=FAILED; ${problem.javaClass.simpleName}; ${problem.message?.take(120)}"
+                )
+            }
+            // 身份标记实验：被标记身份是否持续失败、新身份是否立即恢复。
+            println(
+                "issue38 again=B1; ${playerProbe(repo.http, sessionB, episode8, 1, PLAYER_HOST_PRIMARY)}"
+            )
+            println(
+                "issue38 again=B2; ${playerProbe(repo.http, sessionB, episode8, 1, PLAYER_HOST_PRIMARY)}"
+            )
+            val sessionC = PlaybackDeviceSession()
+            println(
+                "issue38 again=C1; ${playerProbe(repo.http, sessionC, episode8, 1, PLAYER_HOST_PRIMARY)}"
+            )
+            val identityC = sessionC.profile(repo.http)
+            println(
+                "issue38 identity=C; storeRegion=${Regex("store-region=([^;]+)").find(identityC.cookie)?.groupValues?.get(1) ?: "none"}"
+            )
+            println(
+                "issue38 again=B3; ${playerProbe(repo.http, sessionB, episode8, 1, PLAYER_HOST_PRIMARY)}"
+            )
+            // 窗口捕捉：2 分钟内每 ~4 秒轮询三条路径（主 host 复用连接 / 主 host 新连接 /
+            // 备 host 新连接）。空响应窗口出现时，当场可见哪条路径能逃出去。
+            val deadline = System.currentTimeMillis() + 120_000
+            var cycle = 0
+            var empties = 0
+            while (System.currentTimeMillis() < deadline) {
+                cycle++
+                val marks =
+                    listOf(
+                            playerProbe(repo.http, sessionA, episode8, 1, PLAYER_HOST_PRIMARY),
+                            playerProbe(repo.http, sessionA, episode8, 1, PLAYER_HOST_PRIMARY, fresh = true),
+                            playerProbe(repo.http, sessionA, episode8, 1, PLAYER_HOST_FALLBACKS.first(), fresh = true),
+                        )
+                        .map { if (it.contains("EMPTY")) "E" else "." }
+                empties += marks.count { it == "E" }
+                if (marks.any { it == "E" })
+                    println(
+                        "issue38 window; cycle=$cycle; pooled=${marks[0]}; fresh=${marks[1]}; altHost=${marks[2]}"
+                    )
+                Thread.sleep(3000)
+            }
+            println("issue38 windowSummary; cycles=$cycle; empties=$empties")
+        } finally {
+            repo.http.connectionPool.evictAll()
+            repo.http.dispatcher.executorService.shutdown()
             repository.http.connectionPool.evictAll()
             repository.http.dispatcher.executorService.shutdown()
         }
@@ -227,4 +335,83 @@ fun main(args: Array<String>) {
     }
     repository.http.connectionPool.evictAll()
     repository.http.dispatcher.executorService.shutdown()
+}
+
+private const val PLAYER_HOST_PRIMARY = "api5-normal-sinfonlineb.fqnovel.com"
+
+private val PLAYER_HOST_FALLBACKS =
+    listOf(
+        "api5-normal-hl.fqnovel.com",
+        "api5-normal-lf.fqnovel.com",
+        "api5-normal-sinfonlinec.fqnovel.com",
+    )
+
+/**
+ * 播放信息接口单发探测：请求构造与 ContentRepository.streamLadder 完全一致，但不做内部重试。
+ * 输出仅含 HTTP 状态、错误码、档位元数据与本机时钟偏差，不打印签名查询、Cookie 或媒体地址。
+ */
+private fun playerProbe(
+    http: OkHttpClient,
+    session: PlaybackDeviceSession,
+    episodeId: String,
+    level: Int,
+    host: String,
+    fresh: Boolean = false,
+): String {
+    val identity = session.profile(http)
+    val payload =
+        """{"biz_param":{"detail_page_version":0,"device_level":$level,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":${org.json.JSONArray(listOf(episodeId))}}}"""
+            .toByteArray()
+    val query =
+        Signer.encode(identity.values + ("_rticket" to System.currentTimeMillis().toString()))
+    val request =
+        okhttp3.Request.Builder()
+            .url("https://$host/novel/player/multi_video_model/v1/?$query")
+            .header(
+                "User-Agent",
+                "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
+            )
+            .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+            .apply {
+                if (identity.cookie.isNotBlank()) header("Cookie", identity.cookie)
+                // 强制每发新建 TCP+TLS，避免连接池把重试粘在同一个后端节点上。
+                if (fresh) header("Connection", "close")
+            }
+            .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+    return try {
+        RequestScope.execute(http.newCall(request)) { response ->
+            val skew =
+                response.header("Date")?.let {
+                    val format =
+                        java.text.SimpleDateFormat(
+                            "EEE, dd MMM yyyy HH:mm:ss 'GMT'",
+                            java.util.Locale.US,
+                        )
+                    format.timeZone = java.util.TimeZone.getTimeZone("GMT")
+                    format.parse(it)?.let { parsed -> (System.currentTimeMillis() - parsed.time) / 1000 }
+                }
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) return@execute "http=${response.code}; body=EMPTY; skewSec=$skew"
+            val json = org.json.JSONObject(body)
+            val code = json.optInt("Code", json.optInt("code", 0))
+            val data = json.optJSONObject("data")
+            val row = data?.optJSONObject(episodeId)
+            val model =
+                row?.opt("video_model")?.let { value ->
+                    runCatching {
+                        (value as? org.json.JSONObject) ?: org.json.JSONObject(value.toString())
+                    }
+                        .getOrNull()
+                }
+            val renditions =
+                model?.optJSONArray("video_list")?.objects().orEmpty().mapNotNull { entry ->
+                    val meta = entry.optJSONObject("video_meta") ?: return@mapNotNull null
+                    "${meta.optString("codec_type")}/${meta.optString("definition")}/${meta.optInt("vwidth")}x${meta.optInt("vheight")}"
+                }
+            "http=${response.code}; code=$code; rows=${data?.length() ?: 0}; renditions=${renditions.joinToString(",")}; skewSec=$skew"
+        }
+    } catch (problem: Exception) {
+        "error=${problem.javaClass.simpleName}: ${problem.message?.take(80)}"
+    }
 }

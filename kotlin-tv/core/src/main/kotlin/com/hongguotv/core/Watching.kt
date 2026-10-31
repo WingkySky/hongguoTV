@@ -9,16 +9,28 @@ object PlaybackQuality {
     fun normalize(value: Int) = value.takeIf { it in options } ?: 1080
 }
 
-/** One automatic recovery budget per episode; only an explicit user retry resets it. */
+/**
+ * One automatic recovery budget per episode; only an explicit user retry resets it.
+ *
+ * 两段式（issue #38）：快段三次紧跟失败现场（约 8.5 秒），慢段退避拉长到累计五分钟，覆盖
+ * 服务端秒级到分钟级的空响应窗口；快段救「一瞬间坏了」，慢段救「这一阵子坏了」。
+ */
 class RecoveryBudget {
     var attempts = 0
         private set
 
     val remaining
-        get() = attempts < 3
+        get() = attempts < DELAYS_MILLIS.size
 
     val delayMillis
-        get() = listOf(1000L, 2500L, 5000L).getOrNull(attempts)
+        get() = DELAYS_MILLIS.getOrNull(attempts)
+
+    val total
+        get() = DELAYS_MILLIS.size
+
+    /** 快段（前三）之后进入慢段：文案从倒计时切换为「正在自动恢复」。 */
+    val slow
+        get() = attempts >= FAST_ATTEMPTS
 
     fun consume(): Boolean {
         if (!remaining) return false
@@ -28,6 +40,12 @@ class RecoveryBudget {
 
     fun reset() {
         attempts = 0
+    }
+
+    companion object {
+        const val FAST_ATTEMPTS = 3
+        private val DELAYS_MILLIS =
+            listOf(1000L, 2500L, 5000L, 15000L, 30000L, 60000L, 90000L, 105000L)
     }
 }
 

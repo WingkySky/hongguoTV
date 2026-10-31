@@ -126,17 +126,32 @@ class WatchingTest {
     @Test
     fun `automatic recovery is bounded until the user starts a new attempt`() {
         val budget = RecoveryBudget()
-        assertEquals(1000L, budget.delayMillis)
-        assertTrue(budget.consume())
-        assertEquals(2500L, budget.delayMillis)
-        assertTrue(budget.consume())
-        assertEquals(5000L, budget.delayMillis)
-        assertTrue(budget.consume())
+        // 快段三次紧跟失败现场。
+        assertEquals(
+            listOf(1000L, 2500L, 5000L),
+            (1..3).map {
+                val d = budget.delayMillis
+                assertFalse(budget.slow)
+                budget.consume()
+                d
+            },
+        )
+        // 慢段五次退避累计恰五分钟，覆盖分钟级空响应窗口。
+        assertEquals(
+            listOf(15000L, 30000L, 60000L, 90000L, 105000L),
+            (1..5).map {
+                val d = budget.delayMillis
+                assertTrue(budget.slow)
+                budget.consume()
+                d
+            },
+        )
         repeat(10) {
             assertFalse(budget.consume())
             assertNull(budget.delayMillis)
         }
-        assertEquals(3, budget.attempts)
+        assertEquals(8, budget.attempts)
+        assertEquals(8, budget.total)
         budget.reset()
         assertEquals(1000L, budget.delayMillis)
         assertTrue(budget.consume())
