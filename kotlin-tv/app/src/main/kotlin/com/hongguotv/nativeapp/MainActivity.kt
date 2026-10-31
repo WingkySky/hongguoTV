@@ -12,6 +12,7 @@ import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -58,6 +59,8 @@ class MainActivity : Activity() {
 
     private var promotedPreparation: PendingEpisodePreparation? = null
     private var lastPlaybackFailure = ""
+    private var lastPlaybackDetail: String? = null
+    private var autoRecoveredPlay = false
     private var queuedNext: RemoteVideo? = null
     private var queuedHttp: okhttp3.OkHttpClient? = null
     private var queuedEpisode = -1
@@ -204,8 +207,9 @@ class MainActivity : Activity() {
             else if (recovery.consume()) {
                 android.util.Log.i(
                     "HongguoTV",
-                    "Automatic playback recovery ${recovery.attempts}/3 at ${retryPosition}ms",
+                    "Automatic playback recovery ${recovery.attempts}/${recovery.total} at ${retryPosition}ms",
                 )
+                autoRecoveredPlay = true
                 playEpisode(episodeIndex, retryPosition, retryAutoplay, recovering = true)
             }
         }
@@ -2778,7 +2782,10 @@ class MainActivity : Activity() {
         video = prefetched
         var firstReady = true
         var firstFrame = true
-        if (!recovering) recovery.reset()
+        if (!recovering) {
+            recovery.reset()
+            autoRecoveredPlay = false
+        }
         autoRecovery = false
         readySince = 0
         startPosition = position.coerceAtLeast(0)
@@ -2961,6 +2968,12 @@ class MainActivity : Activity() {
                                 }
                                 playbackReady = true
                                 episodeDuration = p.duration.coerceAtLeast(0)
+                                // 自动恢复成功：轻提示一次，不打断续播。
+                                if (autoRecoveredPlay) {
+                                    autoRecoveredPlay = false
+                                    Toast.makeText(this@MainActivity, "已恢复播放", Toast.LENGTH_SHORT)
+                                        .show()
+                                }
                                 if (firstReady) {
                                     firstReady = false
                                     readySince = android.os.SystemClock.elapsedRealtime()
@@ -3355,20 +3368,46 @@ class MainActivity : Activity() {
         if (!foreground || !playError || !autoRecovery || retryPending) return
         if (!recovery.remaining) {
             autoRecovery = false
-            playbackText.text = "$lastPlaybackFailure\n已自动重试 3 次，仍无法播放。可手动重试或切换清晰度。"
+            playbackText.text = recoveryExhaustedText(lastPlaybackFailure) + diagnosticSuffix()
             return
         }
         if (!networkAvailable()) {
             playbackText.text =
-                "$lastPlaybackFailure\n网络已断开，联网后自动续播 · 第 ${episodeIndex+1} 集 ${formatTime(retryPosition)}"
+                "$lastPlaybackFailure\n网络已断开，联网后自动续播 · 第 ${episodeIndex+1} 集 ${formatTime(retryPosition)}" +
+                    diagnosticSuffix()
             return
         }
         val delay = recovery.delayMillis ?: return
         playbackText.text =
-            "$lastPlaybackFailure\n${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
+            recoveryStatusText(
+                failure = lastPlaybackFailure,
+                autoplay = retryAutoplay,
+                slow = recovery.slow,
+                attempt = recovery.attempts + 1,
+                total = recovery.total,
+                delayMillis = delay,
+                positionText = formatTime(retryPosition),
+            ) + diagnosticSuffix()
         retryPending = true
         main.postDelayed(retryRunnable, delay)
     }
+
+    /** 错误页末尾的脱敏诊断行（issue #38）：机型/系统/版本/失败阶段/恢复计数，便于截图定位。 */
+    private fun diagnosticSuffix(): String =
+        try {
+            "\n" +
+                diagnosticLine(
+                    model = Build.MODEL,
+                    androidVersion = Build.VERSION.RELEASE,
+                    appVersion = BuildConfig.VERSION_NAME,
+                    failure = lastPlaybackFailure,
+                    recoveryAttempts = recovery.attempts,
+                    total = recovery.total,
+                    detail = lastPlaybackDetail,
+                )
+        } catch (_: Exception) {
+            ""
+        }
 
     /**
      * Detects growing audio/video drift (video frame processing offset stays signed) and re-seeks
@@ -3415,6 +3454,11 @@ class MainActivity : Activity() {
 
     private fun playerFailure(problem: Throwable) {
         lastPlaybackFailure = playbackFailureSummary(problem)
+        lastPlaybackDetail =
+            generateSequence(problem) { it.cause }
+                .take(8)
+                .filterIsInstance<EmptyPlaybackResponseException>()
+                .firstOrNull()?.detail
         retryPosition = currentPosition().coerceAtLeast(0)
         retryAutoplay = requestedAutoplay && !sleepStopped
         saveProgress()
@@ -3471,7 +3515,7 @@ class MainActivity : Activity() {
                 decoding && lowerTier != null -> "电视无法解码当前视频，可尝试更低清晰度。"
                 decoding -> "电视无法解码当前视频，本集没有更低清晰度可用。"
                 else -> "$lastPlaybackFailure · 可手动重试"
-            }
+            } + diagnosticSuffix()
         val actions = row()
         controls.addView(actions)
         addButton(actions, "立即重试") { playEpisode(episodeIndex, retryPosition, retryAutoplay) }

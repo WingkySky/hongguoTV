@@ -155,7 +155,9 @@ class ContentHttpException(val statusCode: Int) : IOException("内容请求失�
 
 class SearchSessionExpiredException : IOException("搜索结果已过期，请从第 1 页重新搜索")
 
-class EmptyPlaybackResponseException : IOException("播放接口暂时返回空响应，请稍后重试")
+/** `detail` 只携带重试计数与 host 短代号，供错误页诊断行展示，不含地址与凭据。 */
+class EmptyPlaybackResponseException(val detail: String? = null) :
+    IOException("播放接口暂时返回空响应，请稍后重试")
 
 class ContentRepository
 @JvmOverloads
@@ -206,60 +208,13 @@ constructor(
         client: OkHttpClient = http,
         retryEmptyPlayback: Boolean = false,
     ): String {
-        val request =
-            Request.Builder()
-                .url(url)
-                .header("User-Agent", VendorConstants.VIDEO_UA)
-                .header("Accept-Language", "zh-CN,zh;q=0.9")
-        signed?.headers?.forEach { (k, v) -> request.header(k, v) }
-        signed?.body?.let {
-            request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType()))
-        }
-        fun fetch(): String {
-            val next =
-                request.build().let { original ->
-                    if (retryEmptyPlayback)
-                        original
-                            .newBuilder()
-                            .url(
-                                original.url
-                                    .newBuilder()
-                                    .setQueryParameter("_rticket", clock().toString())
-                                    .build()
-                            )
-                            .build()
-                    else original
-                }
-            return RequestScope.execute(client.newCall(next)) { response ->
-                if (!response.isSuccessful) throw ContentHttpException(response.code)
-                val body = response.body ?: throw IOException("内容响应为空")
-                if (body.contentLength() > 16 * 1024 * 1024) throw IOException("内容响应过大")
-                val input = body.byteStream()
-                val out = java.io.ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                while (out.size() <= 16 * 1024 * 1024) {
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    out.write(buffer, 0, n)
-                }
-                val bytes = out.toByteArray()
-                if (bytes.size > 16 * 1024 * 1024) throw IOException("内容响应过大")
-                val content = String(bytes, Charsets.UTF_8)
-                if (retryEmptyPlayback && content.isBlank()) throw EmptyPlaybackResponseException()
-                content
-            }
-        }
+        val request = signedRequest(url, signed)
         var retries = 0
         while (true) {
             try {
-                return fetch()
+                return fetchOnce(request, client, refreshTicket = retryEmptyPlayback)
             } catch (e: IOException) {
-                val temporary =
-                    e is EmptyPlaybackResponseException ||
-                        e is java.net.SocketTimeoutException ||
-                        e is java.net.SocketException ||
-                        e is java.net.UnknownHostException ||
-                        (e is ContentHttpException && e.statusCode in setOf(500, 502, 503, 504))
+                val temporary = PlayRetryPlan.temporary(e)
                 val delay =
                     if (e is EmptyPlaybackResponseException) listOf(700L, 1500L).getOrNull(retries)
                     else if (retries == 0) 700L else null
@@ -279,6 +234,56 @@ constructor(
                 }
                 retries++
             }
+        }
+    }
+
+    // 构造内容请求：站点 UA 与语言头在前，签名头按序覆盖；供 text() 与播放信息重试循环共用。
+    private fun signedRequest(url: String, signed: Signer.Request?): Request.Builder {
+        val request =
+            Request.Builder()
+                .url(url)
+                .header("User-Agent", VendorConstants.VIDEO_UA)
+                .header("Accept-Language", "zh-CN,zh;q=0.9")
+        signed?.headers?.forEach { (k, v) -> request.header(k, v) }
+        signed?.body?.let {
+            request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType()))
+        }
+        return request
+    }
+
+    /** 单次请求执行：HTTP 状态、响应大小与空响应判定；重试策略由调用方决定。 */
+    private fun fetchOnce(request: Request.Builder, client: OkHttpClient, refreshTicket: Boolean): String {
+        val next =
+            request.build().let { original ->
+                if (refreshTicket)
+                    original
+                        .newBuilder()
+                        .url(
+                            original.url
+                                .newBuilder()
+                                .setQueryParameter("_rticket", clock().toString())
+                                .build()
+                        )
+                        .build()
+                else original
+            }
+        return RequestScope.execute(client.newCall(next)) { response ->
+            if (!response.isSuccessful) throw ContentHttpException(response.code)
+            val body = response.body ?: throw IOException("内容响应为空")
+            if (body.contentLength() > 16 * 1024 * 1024) throw IOException("内容响应过大")
+            val input = body.byteStream()
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (out.size() <= 16 * 1024 * 1024) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                out.write(buffer, 0, n)
+            }
+            val bytes = out.toByteArray()
+            if (bytes.size > 16 * 1024 * 1024) throw IOException("内容响应过大")
+            val content = String(bytes, Charsets.UTF_8)
+            if (refreshTicket && content.isBlank()) throw EmptyPlaybackResponseException()
+            content
         }
     }
 
@@ -680,25 +685,65 @@ constructor(
                         """{"biz_param":{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":${JSONArray(ids)}}}"""
                             .toByteArray()
                     val identity = playbackSession.profile(http)
-                    val query = Signer.encode(identity.values + ("_rticket" to clock().toString()))
-                    val playerUrl =
-                        "https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?$query"
-                    val request =
-                        Signer.Request(
-                            playerUrl,
-                            mapOf(
-                                "User-Agent" to
-                                    "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
-                                "Accept" to "application/json; charset=utf-8,application/x-protobuf",
-                            ) +
-                                if (identity.cookie.isBlank()) emptyMap()
-                                else mapOf("Cookie" to identity.cookie),
-                            payload,
-                        )
                     // 批量接口同次读取当前集和至多后两集，减少连续手动切集时的播放信息请求。
-                    // 空响应按有界退避恢复；只更新请求时间戳，不轮换设备或账号身份。
+                    // 空响应按有界退避逐次换路恢复（换 host + 新连接）；只刷新请求时间戳，
+                    // 不轮换设备或账号身份。探针实测（2026-10-31）：服务端空响应是短暂成簇
+                    // 窗口，同连接同 host 的重试无法逃逸，见 issue #38 与 PlayRetryPlan。
+                    var content: String? = null
+                    var lastError: IOException? = null
+                    val tried = mutableListOf<String>()
+                    for (attempt in 0 until PlayRetryPlan.maxAttempts) {
+                        if (attempt > 0) {
+                            try {
+                                Thread.sleep(PlayRetryPlan.delaysMillis[attempt - 1])
+                            } catch (_: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                                throw java.io.InterruptedIOException("请求已取消")
+                            }
+                        }
+                        val host = PlayRetryPlan.host(attempt)
+                        tried += PlayRetryPlan.tag(host)
+                        val query =
+                            Signer.encode(identity.values + ("_rticket" to clock().toString()))
+                        val playerUrl = "https://$host/novel/player/multi_video_model/v1/?$query"
+                        val request =
+                            signedRequest(
+                                playerUrl,
+                                Signer.Request(
+                                    playerUrl,
+                                    mapOf(
+                                        "User-Agent" to
+                                            "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
+                                        "Accept" to
+                                            "application/json; charset=utf-8,application/x-protobuf",
+                                    ) +
+                                        (if (identity.cookie.isBlank()) emptyMap()
+                                        else mapOf("Cookie" to identity.cookie)) +
+                                        (if (PlayRetryPlan.freshConnection(attempt))
+                                            mapOf("Connection" to "close")
+                                        else emptyMap()),
+                                    payload,
+                                ),
+                            )
+                        try {
+                            content = fetchOnce(request, http, refreshTicket = true)
+                            break
+                        } catch (e: IOException) {
+                            if (Thread.currentThread().isInterrupted) throw e
+                            lastError = e
+                            if (!PlayRetryPlan.temporary(e)) throw e
+                        }
+                    }
+                    // 全部尝试耗尽时直接抛出（带计数与 host 代号），保持 response 为纯文本。
                     val response =
-                        text(playerUrl, request, retryTransient = true, retryEmptyPlayback = true)
+                        content
+                            ?: throw (lastError?.let { error ->
+                                if (error is EmptyPlaybackResponseException)
+                                    EmptyPlaybackResponseException(
+                                        "空响应x${tried.size} host=${tried.joinToString(",")}"
+                                    )
+                                else error
+                            } ?: IOException("播放信息请求失败"))
                     val data = JSONObject(response)
                     val code = data.optInt("Code", data.optInt("code", 0))
                     if (code != 0) throw IOException("播放接口暂不可用（错误码 $code）")

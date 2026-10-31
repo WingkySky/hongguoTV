@@ -212,7 +212,8 @@ class ContentRepositoryTest {
         val error = assertThrows(IOException::class.java) { repo.stream("123") }
         assertTrue(error.message.orEmpty().contains("空响应"))
         assertFalse(error.message.orEmpty().contains("更新应用"))
-        assertEquals(3, calls)
+        // 首次尝试 + 三次换路重试（b→hl→lf→b）。
+        assertEquals(4, calls)
     }
 
     private fun inlinePlaybackFixture(): String =
@@ -312,7 +313,7 @@ class ContentRepositoryTest {
     }
 
     @Test
-    fun playbackModelRecoversFromOneEmptyResponseWithoutChangingRequestIdentity() {
+    fun playbackModelRecoversFromOneEmptyResponseOnADifferentHostWithoutChangingIdentity() {
         val requests = mutableListOf<Request>()
         var now = 1000L
         val repo =
@@ -323,14 +324,19 @@ class ContentRepositoryTest {
             }
         assertEquals("https://example.com/video", repo.streamLadder("123").renditions.single().url)
         assertEquals(2, requests.size)
+        // 换路重试：host 轮换到备选，设备身份查询参数保持一致，仅时间戳单独刷新。
+        assertNotEquals(requests[0].url.host, requests[1].url.host)
         assertEquals(
-            requests[0].url.newBuilder().removeAllQueryParameters("_rticket").build(),
+            requests[0].url.newBuilder().host(requests[1].url.host).removeAllQueryParameters("_rticket").build(),
             requests[1].url.newBuilder().removeAllQueryParameters("_rticket").build(),
         )
         assertNotEquals(
             requests[0].url.queryParameter("_rticket"),
             requests[1].url.queryParameter("_rticket"),
         )
+        // 重试强制新建连接，首拍不携带。
+        assertNull(requests[0].header("Connection"))
+        assertEquals("close", requests[1].header("Connection"))
         val first = okio.Buffer().also { requests[0].body!!.writeTo(it) }.readUtf8()
         val second = okio.Buffer().also { requests[1].body!!.writeTo(it) }.readUtf8()
         assertEquals(first, second)
